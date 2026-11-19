@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <title>Ú òa – Trốn tìm 3D</title>
+  <meta name="description" content="Ú òa – game trốn tìm 3D: ngụy trang bằng màu sắc, nghe tiếng kêu định vị và săn người bằng ná cao su.">
+  <meta name="theme-color" content="#1b2a4a">
+  <link rel="stylesheet" href="./assets/style.css?v=1">
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<!-- ============ MENU ============ -->
+<div id="menu" class="screen show">
+  <div class="menuwrap">
+    <section class="card hero">
+      <h1 class="logo">Ú <span>òa</span>!</h1>
+      <p class="tag">Trốn tìm 3D · tô màu ngụy trang · nghe tiếng định vị · ná cao su</p>
+      <div class="pv"><canvas id="pv"></canvas></div>
+      <div class="charname" id="charName"></div>
+      <div id="charGrid" class="chars"></div>
+      <div class="pts">⭐ Điểm của bạn: <b id="ptsTotal">0</b></div>
+    </section>
+    <section class="card settings">
+      <h2>Thiết lập trận</h2>
+      <label class="row"><span>Tổng số người <small>(gồm cả bot, tối đa 10)</small></span>
+        <div class="stepper"><button data-step="total" data-d="-1">−</button><input id="total" type="number" min="2" max="10" value="6" inputmode="numeric"><button data-step="total" data-d="1">+</button></div></label>
+      <label class="row"><span>Số người đi tìm <small id="seekHint"></small></span>
+        <div class="stepper"><button data-step="seekers" data-d="-1">−</button><input id="seekers" type="number" min="1" max="9" value="2" inputmode="numeric"><button data-step="seekers" data-d="1">+</button></div></label>
+      <div class="row col"><span>Vai của bạn</span>
+        <div class="seg" id="segRole"><button data-v="random" class="on">🎲 Ngẫu nhiên</button><button data-v="seeker">🎯 Đi tìm</button><button data-v="hider">🫣 Đi trốn</button></div></div>
+      <div class="row col"><span>Bản đồ</span><select id="mapSel"></select><small id="mapDesc"></small></div>
+      <div class="row col"><span>Độ khó bot</span>
+        <div class="seg" id="segLevel"><button data-v="easy">Dễ</button><button data-v="normal" class="on">Trung bình</button><button data-v="hard">Khó</button></div></div>
+      <div class="row col"><span>Đồ họa</span>
+        <div class="seg" id="segQ"><button data-v="0">Thấp</button><button data-v="1" class="on">Vừa</button><button data-v="2">Cao</button></div></div>
+      <button id="btnStart" class="big">▶ Bắt đầu trận</button>
+      <button id="btnHelp" class="ghost">Cách chơi &amp; điều khiển</button>
+    </section>
+  </div>
+</div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="screen">
+  <div id="top">
+    <div class="pill" id="roleBadge"></div>
+    <div class="mid"><div id="phaseTxt"></div><div id="timer">0:00</div></div>
+    <div class="pill" id="counts"></div>
+    <button id="btnPause" class="iconbtn" aria-label="Tạm dừng">⏸</button>
+  </div>
+  <div id="specTxt"></div>
+  <div id="cross"><i></i></div>
+  <div id="blind"><div><h2>Đang nhắm mắt đếm…</h2><p id="blindTxt"></p></div></div>
+  <div id="banner"></div>
+  <div id="feed"></div>
+  <div id="toast"></div>
+  <div id="hint"></div>
+
+  <div id="bars">
+    <div class="bar" id="barA"><label id="barALbl"></label><div><i id="barAFill"></i></div></div>
+    <div class="bar ping" id="barP"><label>Tiếng kêu</label><div><i id="barPFill"></i></div></div>
+  </div>
+
+  <div id="paint">
+    <div class="ptitle">🎨 Tô màu ngụy trang <button id="paintX" class="x">✕</button></div>
+    <div class="seg small" id="segPaint"><button data-v="quick" class="on">Nhanh · cả người</button><button data-v="adv">Từng vùng</button></div>
+    <div id="zones" class="zones"></div>
+    <div id="swatches" class="sw"></div>
+    <div class="customrow"><label>Màu tùy chỉnh <input type="color" id="customColor" value="#7a8f5a"></label><button id="paintClear" class="ghost sm">Xóa màu</button></div>
+    <p class="note">Chọn màu giống vật thể quanh chỗ bạn trốn. Người đi tìm vẫn nhìn ra bạn nếu bạn lệch màu hoặc đang chạy.</p>
+  </div>
+  <button id="bPaint" class="tbtn paintbtn">🎨</button>
+
+  <div id="joy"><div id="joyKnob"></div></div>
+  <div id="tbtns">
+    <button id="bFire" class="tbtn fire">🎯</button>
+    <button id="bSprint" class="tbtn">💨</button>
+    <button id="bCrouch" class="tbtn">🧎</button>
+  </div>
+  <div id="lockHint">Nhấp vào màn hình để khóa chuột · Q: khóa/mở khóa</div>
+</div>
+
+<!-- ============ MODALS ============ -->
+<div id="pause" class="screen modal"><div class="card">
+  <h2>Tạm dừng</h2>
+  <label class="row"><span>Âm lượng</span><input type="range" id="volume" min="0" max="100" value="80"></label>
+  <label class="row"><span>Độ nhạy camera</span><input type="range" id="sens" min="30" max="200" value="100"></label>
+  <button id="btnResume" class="big">Tiếp tục</button>
+  <button id="btnQuit" class="ghost">Thoát về menu</button>
+</div></div>
+
+<div id="result" class="screen modal"><div class="card">
+  <h2 id="resTitle"></h2><p id="resSub"></p>
+  <div class="stats" id="resStats"></div>
+  <table id="resTable"></table>
+  <button id="btnAgain" class="big">↻ Chơi lại</button>
+  <button id="btnMenu" class="ghost">Về phòng chờ</button>
+</div></div>
+
+<div id="help" class="screen modal"><div class="card wide">
+  <h2>Cách chơi</h2>
+  <ol class="rules">
+    <li><b>Ngụy trang 60 giây:</b> người đi trốn tô màu lên nhân vật và chạy đi tìm chỗ nấp. Người đi tìm nhắm mắt, hai phe không thấy nhau.</li>
+    <li><b>Truy tìm 180 giây:</b> người đi tìm bắn ná cao su (hồi 2 giây, trúng là bắt). Cứ 5 giây mỗi người trốn phát một tiếng kêu — hãy nghe hướng và độ to để đoán chỗ.</li>
+    <li>Người trốn thắng nếu còn ít nhất một người sống khi hết giờ. Người tìm thắng nếu bắt hết.</li>
+    <li>Cúi thấp thì im lặng và khó thấy hơn nhưng đi chậm. Chạy nước rút (5 giây, hồi 15 giây) nhanh hơn nhưng bước chân ồn.</li>
+  </ol>
+  <div class="keys">
+    <div><b>PC</b> · WASD đi · Chuột phải (giữ) hoặc khóa chuột để xoay · Shift chạy · C cúi · Chuột trái / Space bắn · E mở bảng màu · Lăn chuột zoom · Esc tạm dừng</div>
+    <div><b>Điện thoại</b> · Cần trái đi · vuốt màn hình để xoay · 💨 chạy · 🧎 cúi · 🎯 bắn · 🎨 bảng màu</div>
+  </div>
+  <button id="btnHelpX" class="big">Đã hiểu</button>
+</div></div>
+
+<div id="loading" class="screen show"><div>Đang tải Ú òa…</div></div>
+
+<script src="./assets/three-r147.min.js"></script>
+<script src="./assets/RoomEnvironment.js"></script>
+<script src="./assets/config.js"></script>
+<script src="./assets/maps.js"></script>
+<script src="./assets/sim.js"></script>
+<script src="./assets/ai.js"></script>
+<script src="./assets/chars.js"></script>
+<script src="./assets/guns.js"></script>
+<script src="./assets/character.js"></script>
+<script src="./assets/render.js"></script>
+<script src="./assets/audio.js"></script>
+<script src="./assets/input.js"></script>
+<script src="./assets/game.js"></script>
+</body>
+</html>
