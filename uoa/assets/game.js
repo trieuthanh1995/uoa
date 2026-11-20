@@ -59,26 +59,27 @@
     const avatars = new Map(); for (const p of sim.players.values()) avatars.set(p.id, new R.Avatar(world, p, p.id === 'me'));
     const me = sim.players.get('me');
     cam.yaw = Math.atan2(-me.x, -me.z); cam.pitch = 0.4;
-    match = { sim, world, fx, cam, avatars, me, paintMode: 'quick', zone: 'body', color: null, tickAt: -1, hintUntil: 0, spec: null, over: false, pingFlash: 0, resultShown: false };
+    match = { sim, world, fx, cam, avatars, me, studio: null, studioOpen: false, lowAt: 0, tickAt: -1, hintUntil: 0, spec: null, over: false, pingFlash: 0, resultShown: false };
     resize();
     document.body.classList.toggle('seeker-role', me.role === 'seeker'); document.body.classList.toggle('hider-role', me.role === 'hider');
     $('#hud').classList.toggle('hider', me.role === 'hider');
     const rb = $('#roleBadge'); rb.className = 'pill ' + me.role; rb.textContent = me.role === 'seeker' ? '🎯 Người đi tìm' : '🫣 Người đi trốn';
     $('#barALbl').textContent = me.role === 'seeker' ? 'Ná cao su' : 'Chạy nước rút (Shift)';
     $('#cross').style.display = 'none'; $('#blind').classList.remove('show'); $('#paint').classList.remove('show'); $('#specTxt').textContent = ''; $('#feed').innerHTML = '';
-    buildPaintUI();
+    if (me.role === 'hider') { match.studio = new UO.PaintStudio(avatars.get('me')); avatars.get('me').useStudio = true; buildPaintUI(); }
+    $('#brushRing').classList.remove('on'); document.body.classList.remove('studio'); In.studio = false;
     $('#menu').classList.remove('show'); $('#result').classList.remove('show'); $('#pause').classList.remove('show'); $('#hud').classList.add('show');
     $('#bars').style.display = ''; paused = false; In.enabled = true; In.resetButtons();
     if (preview) preview.setAnim('idle');
     sim.start(); handleEvents();
   }
   function disposeMatch() {
-    if (!match) return; for (const a of match.avatars.values()) a.dispose(); match.fx.clear(); match.world.dispose(); match = null;
+    if (!match) return; if (match.studio) match.studio.dispose(); for (const a of match.avatars.values()) a.dispose(); match.fx.clear(); match.world.dispose(); match = null;
   }
   function endMatchToMenu() {
     disposeMatch(); In.enabled = false; In.unlock(); paused = false;
     $('#hud').classList.remove('show'); $('#result').classList.remove('show'); $('#pause').classList.remove('show'); $('#menu').classList.add('show');
-    document.body.classList.remove('seeker-role', 'hider-role', 'locked'); $('#ptsTotal').textContent = points; if (preview) { preview.resize(); showChar(); }
+    document.body.classList.remove('seeker-role', 'hider-role', 'locked', 'studio', 'paint-able'); In.studio = false; $('#brushRing').classList.remove('on'); $('#ptsTotal').textContent = points; if (preview) { preview.resize(); showChar(); }
     renderer.setClearColor(0x14203a);
   }
 
@@ -90,33 +91,86 @@
   function hint(txt, sec) { $('#hint').textContent = txt; match.hintUntil = match.sim.t + (sec || 8); }
   const nameOf = (id) => { const p = match.sim.players.get(id); return p ? (p.id === 'me' ? 'Bạn' : p.name) : '?'; };
 
-  /* ---------- bảng tô màu ---------- */
+  /* ---------- xưởng tô màu (cọ vẽ tự do) ---------- */
+  const ZONE_BTNS = [['all', 'Tất cả'], ['head', 'Đầu'], ['bodyF', 'Thân trước'], ['bodyB', 'Thân sau'], ['armL', 'Tay trái'], ['armR', 'Tay phải'], ['legL', 'Chân trái'], ['legR', 'Chân phải']];
+  const STUDIO_TOOL = { tool: 'paint' };
+  function brushPx() { const m = match, cam = m.world.camera, ppm = window.innerHeight / (2 * m.cam.sdist * Math.tan(cam.fov * Math.PI / 360)); return m.studio.brush.size * 2 * ppm; }
+  function updateRing(x, y) {
+    const r = $('#brushRing'); if (!match || !match.studioOpen || STUDIO_TOOL.tool !== 'paint') { r.classList.remove('on'); return; }
+    const d = Math.max(6, brushPx()); r.style.width = r.style.height = d + 'px'; if (x != null) { r.style.left = x + 'px'; r.style.top = y + 'px'; } r.classList.add('on');
+    r.style.borderColor = match.studio.brush.erase ? '#ff8a8a' : '#fff';
+  }
   function buildPaintUI() {
+    const m = match, ps = m.studio; if (!ps) return;
     const sw = $('#swatches'); sw.innerHTML = '';
-    for (const [n, c] of UO.PALETTE) { const b = document.createElement('button'); b.style.background = c; b.title = n; b.dataset.c = c; b.onclick = () => { applyPaint(c); }; sw.append(b); }
+    for (const [n, c] of UO.PALETTE) { const b = document.createElement('button'); b.style.background = c; b.title = n; b.dataset.c = c; b.onclick = () => setBrushColor(c); sw.append(b); }
     const zn = $('#zones'); zn.innerHTML = '';
-    for (const [k, n] of UO.ZONES) { const b = document.createElement('button'); b.dataset.z = k; b.innerHTML = n + '<i></i>'; b.onclick = () => { match.zone = k; refreshPaintUI(); }; zn.append(b); }
-    $('#segPaint').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; match.paintMode = b.dataset.v; A.ui('click'); refreshPaintUI(); };
-    $('#customColor').oninput = (e) => applyPaint(e.target.value);
-    $('#paintClear').onclick = () => { const me = match.me, z = Object.assign({}, me.paint || {}); if (match.paintMode === 'quick') { match.sim.setPaint('me', null); } else { delete z[match.zone]; match.sim.setPaint('me', Object.keys(z).length ? z : null); } A.ui('click'); refreshPaintUI(); };
-    $('#paintX').onclick = () => $('#paint').classList.remove('show');
+    for (const [k, n] of ZONE_BTNS) { const b = document.createElement('button'); b.dataset.z = k; b.textContent = n; b.onclick = () => { ps.zone = k; ps.setHighlight(k); A.ui('click'); refreshPaintUI(); }; zn.append(b); }
+    $('#segTool').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; STUDIO_TOOL.tool = b.dataset.v; A.ui('click'); refreshPaintUI(); };
+    $('#segKind').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.v === 'erase') ps.brush.erase = !ps.brush.erase; else { ps.brush.kind = b.dataset.v; ps.brush.erase = false; } A.ui('click'); refreshPaintUI(); };
+    $('#customColor').oninput = (e) => setBrushColor(e.target.value);
+    $('#hexIn').onchange = (e) => { let v = e.target.value.trim(); if (!v.startsWith('#')) v = '#' + v; if (/^#[0-9a-fA-F]{6}$/.test(v)) setBrushColor(v.toLowerCase()); else refreshPaintUI(); };
+    $('#brushSize').oninput = (e) => { ps.brush.size = +e.target.value * 0.007; refreshPaintUI(); };
+    $('#brushOp').oninput = (e) => { ps.brush.opacity = +e.target.value / 100; refreshPaintUI(); };
+    $('#pUndo').onclick = () => { if (ps.undo()) A.ui('click'); };
+    $('#pRedo').onclick = () => { if (ps.redo()) A.ui('click'); };
+    $('#pFillZone').onclick = () => { if (!ps.fill(ps.zone === 'all' ? 'all' : ps.zone, ps.brush.color) && ps.actions.length >= 300) toast('Đã đạt giới hạn hoàn tác'); A.ui('click'); };
+    $('#pFillAll').onclick = () => { ps.fill('all', ps.brush.color); A.ui('click'); };
+    $('#pClearZone').onclick = () => { ps.clearStrokes(ps.zone); A.ui('click'); };
+    $('#pResetZone').onclick = () => { ps.reset(ps.zone); A.ui('click'); };
+    $('#paintX').onclick = closeStudio;
+    ps.onChange = () => { applySummary(); refreshPaintUI(); };
+    ps.brush.size = +$('#brushSize').value * 0.007; ps.brush.opacity = +$('#brushOp').value / 100; ps.brush.color = $('#customColor').value;
     refreshPaintUI();
   }
-  function applyPaint(c) {
-    const m = match; if (!m || !m.sim.canPaint() || m.me.role !== 'hider') return; m.color = c;
-    const z = Object.assign({}, m.me.paint || {});
-    if (m.paintMode === 'quick') for (const [k] of UO.ZONES) z[k] = c; else z[m.zone] = c;
-    m.sim.setPaint('me', z); A.ui('click'); refreshPaintUI();
-  }
+  function setBrushColor(c) { const ps = match.studio; ps.brush.color = c; ps.brush.erase = false; $('#customColor').value = c; $('#hexIn').value = c; A.ui('click'); refreshPaintUI(); }
+  function applySummary() { const m = match; if (!m || !m.studio) return; m.sim.setPaint('me', m.studio.hasArt() ? m.studio.summary() : null, m.studio.exportArt()); }
   function refreshPaintUI() {
-    const m = match; if (!m) return; const z = m.me.paint || {};
-    $$('#segPaint button').forEach((b) => b.classList.toggle('on', b.dataset.v === m.paintMode)); $('#zones').classList.toggle('show', m.paintMode === 'adv');
-    $$('#zones button').forEach((b) => { b.classList.toggle('on', b.dataset.z === m.zone); b.querySelector('i').style.background = z[b.dataset.z] || ''; });
-    $$('#swatches button').forEach((b) => b.classList.toggle('on', b.dataset.c === m.color));
+    const m = match; if (!m || !m.studio) return; const ps = m.studio, b = ps.brush;
+    $$('#segTool button').forEach((x) => x.classList.toggle('on', x.dataset.v === STUDIO_TOOL.tool));
+    $$('#segKind button').forEach((x) => x.classList.toggle('on', x.dataset.v === 'erase' ? b.erase : (!b.erase && x.dataset.v === b.kind)));
+    $$('#zones button').forEach((x) => x.classList.toggle('on', x.dataset.z === ps.zone));
+    $$('#swatches button').forEach((x) => x.classList.toggle('on', x.dataset.c === b.color));
+    $('#brushSizeV').textContent = (b.size * 200).toFixed(1).replace(/\.0$/, '') + ' cm'; $('#brushOpV').textContent = Math.round(b.opacity * 100) + '%';
+    $('#pUndo').disabled = !ps.canUndo; $('#pRedo').disabled = !ps.canRedo; updateRing();
   }
-  function togglePaint() {
-    const m = match; if (!m || m.me.role !== 'hider' || !m.sim.canPaint()) return;
-    $('#paint').classList.toggle('show'); if ($('#paint').classList.contains('show')) In.unlock();
+  function openStudio() {
+    const m = match; if (!m || !m.studio || m.me.role !== 'hider' || !m.sim.canPaint() || m.studioOpen) return;
+    m.studioOpen = true; In.studio = true; In.setProne(false); In.unlock(); document.body.classList.add('studio');
+    const av = m.avatars.get('me'); m.cam.yaw = av.p.yaw + Math.PI; m.cam.pitch = 0.12; m.cam.sdist = 2.7;
+    $('#paint').classList.add('show'); m.studio.setHighlight(m.studio.zone); refreshPaintUI(); $('#bPaint').style.display = 'none';
+  }
+  function closeStudio() {
+    const m = match; if (!m || !m.studioOpen) return; if (m.studio.live) m.studio.end();
+    m.studioOpen = false; In.studio = false; document.body.classList.remove('studio'); $('#paint').classList.remove('show'); $('#brushRing').classList.remove('on'); $('#bPaint').style.display = '';
+    m.studio.setHighlight(null); applySummary(); m.cam.yaw = m.me.yaw; m.cam.pitch = 0.4;
+  }
+  function togglePaint() { const m = match; if (!m || m.me.role !== 'hider' || !m.sim.canPaint()) return; if (m.studioOpen) closeStudio(); else openStudio(); }
+  function ndcOf(e) { const r = canvas.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * 2 - 1, -(((e.clientY - r.top) / r.height) * 2 - 1)]; }
+  let drawing = null;
+  function strokeTo(e) {
+    const m = match, ps = m.studio; const last = drawing.last, dx = e.clientX - last[0], dy = e.clientY - last[1], dist = Math.hypot(dx, dy);
+    const sp = Math.max(2.5, brushPx() * (ps.brush.kind === 'dots' ? 1.15 : 0.3)), n = Math.max(1, Math.floor(dist / sp));
+    for (let i = 1; i <= n; i++) { const x = last[0] + dx * i / n, y = last[1] + dy * i / n, nd = ndcOf({ clientX: x, clientY: y }); ps.addHit(ps.pick(m.world.camera, nd[0], nd[1])); }
+    drawing.last = [e.clientX, e.clientY];
+  }
+  function bindStudioPointer() {
+    canvas.addEventListener('pointerdown', (e) => {
+      const m = match; if (!m || !m.studioOpen || e.button === 2) return;
+      if (STUDIO_TOOL.tool === 'rotate') { drawing = { rot: true, last: [e.clientX, e.clientY] }; canvas.setPointerCapture(e.pointerId); return; }
+      if (!m.studio.begin()) { toast('Đã đạt giới hạn số nét vẽ'); return; }
+      drawing = { last: [e.clientX, e.clientY], id: e.pointerId }; canvas.setPointerCapture(e.pointerId);
+      const nd = ndcOf(e); m.studio.addHit(m.studio.pick(m.world.camera, nd[0], nd[1]));
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      const m = match; if (!m || !m.studioOpen) return; updateRing(e.clientX, e.clientY);
+      if (!drawing) return;
+      if (drawing.rot) { m.cam.rotate(e.clientX - drawing.last[0], e.clientY - drawing.last[1], 0.006); drawing.last = [e.clientX, e.clientY]; return; }
+      if ((e.buttons & 2) && !(e.buttons & 1)) return; strokeTo(e);
+    });
+    const up = () => { const m = match; if (!drawing) return; if (!drawing.rot && m && m.studio) m.studio.end(); drawing = null; };
+    canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+    canvas.addEventListener('pointerleave', () => $('#brushRing').classList.remove('on'));
   }
 
   /* ---------- sự kiện mô phỏng ---------- */
@@ -129,26 +183,26 @@
         case 'phase': onPhase(e); break;
         case 'ping': {
           const src = sim.players.get(e.id);
-          if (canHear()) { const L = listenerOf(), h = UO.hearGain(sim.map, L.x, L.z, e.x, e.z, C.PING.range, e.gain); A.ping(e.id, e.x, e.z, me.caught ? Math.max(h.gain, 0.35) : h.gain, h.walls); }
+          if (canHear()) { const L = listenerOf(), h = UO.hearGain(sim.map, L.x, L.y, L.z, e.x, e.y, e.z, C.PING.range, e.gain); A.ping(e.id, e.x, e.z, me.caught ? Math.max(h.gain, 0.35) : h.gain, h.walls, e.y); }
           else if (e.id === 'me') { A.ui('selfping'); m.pingFlash = 0.35; }
           void src; break;
         }
         case 'step': {
-          if (e.sprint || Math.random() < 0.4) m.fx.dust(e.x, e.z, e.sprint);
-          if (canHear()) { const L = listenerOf(), h = UO.hearGain(sim.map, L.x, L.z, e.x, e.z, e.sprint ? C.FOOT.sprintRange : C.FOOT.walkRange, 1); if (h.gain > 0) A.step(e.x, e.z, h.gain, e.sprint, h.walls); }
+          if (e.sprint || Math.random() < 0.4) m.fx.dust(e.x, e.z, e.sprint, e.y);
+          if (canHear()) { const L = listenerOf(), rng = (e.sprint ? C.FOOT.sprintRange : C.FOOT.walkRange) * (e.soft ? 0.35 : 1), h = UO.hearGain(sim.map, L.x, L.y, L.z, e.x, e.y, e.z, rng, 1); if (h.gain > 0) A.step(e.x, e.z, h.gain, e.sprint, h.walls, e.y); }
           break;
         }
         case 'sprint': if (e.id === 'me') A.ui('sprint'); break;
-        case 'fire': m.fx.launch(e); A.twang(e.x, e.z, e.id === 'me'); if (e.id === 'me') m.cam.shake = 0.05; break;
+        case 'fire': m.fx.launch(e); A.twang(e.x, e.z, e.id === 'me', e.y); if (e.id === 'me') m.cam.shake = 0.05; break;
         case 'stone_end': {
           m.fx.endStone(e);
-          if (e.kind === 'hider') { m.fx.burst(e.x, e.y, e.z, 0xffd23f, 16, 4.2, 0.7, 0.09); m.fx.burst(e.x, e.y, e.z, 0xff6fae, 8, 3, 0.6, 0.07); A.thud(e.x, e.z, 'hider'); }
-          else if (e.kind !== 'range') { m.fx.burst(e.x, e.y, e.z, e.kind === 'ground' ? 0xd9cdb4 : 0xe8e2d0, 7, 2.2, 0.4, 0.06); A.thud(e.x, e.z, 'wall'); }
+          if (e.kind === 'hider') { m.fx.burst(e.x, e.y, e.z, 0xffd23f, 16, 4.2, 0.7, 0.09); m.fx.burst(e.x, e.y, e.z, 0xff6fae, 8, 3, 0.6, 0.07); A.thud(e.x, e.z, 'hider', e.y); }
+          else if (e.kind !== 'range') { m.fx.burst(e.x, e.y, e.z, e.kind === 'ground' ? 0xd9cdb4 : 0xe8e2d0, 7, 2.2, 0.4, 0.06); A.thud(e.x, e.z, 'wall', e.y); }
           break;
         }
         case 'catch': {
           const v = sim.players.get(e.id), by = sim.players.get(e.by);
-          m.fx.ring(v.x, v.z, 0xffd23f); m.fx.burst(v.x, 1.2, v.z, 0xffffff, 18, 4, 0.9, 0.08, 1.5);
+          m.fx.ring(v.x, v.z, 0xffd23f, v.y); m.fx.burst(v.x, v.y + 1.2, v.z, 0xffffff, 18, 4, 0.9, 0.08, 1.5);
           feed('🎯 ' + nameOf(e.by) + ' đã bắt ' + nameOf(e.id) + ' (còn ' + e.left + ')');
           if (e.id === 'me') { A.ui('caught'); banner('BẠN ĐÃ BỊ BẮT!<small>Bạn có thể xem tiếp trận đấu (nhấp chuột để đổi người xem)</small>', 3200); m.cam.shake = 0.3; startSpectate(); }
           else if (e.by === 'me') { A.ui('catch'); toast('🎯 Đã bắt ' + nameOf(e.id) + '!', 1800); }
@@ -171,13 +225,13 @@
     } else if (e.phase === 'prep') {
       A.ui('start');
       if (me.role === 'seeker') { $('#blind').classList.add('show'); $('#blindTxt').textContent = 'Người đi trốn đang ngụy trang. Bạn sẽ được mở mắt khi hết giờ.'; $('#hint').textContent = ''; }
-      else { hint('🎨 Tô màu giống nơi bạn trốn (' + (In.touch ? 'nút 🎨' : 'phím E') + ' mở/đóng bảng màu), rồi chạy đến chỗ nấp. Người đi tìm không nhìn thấy bạn lúc này.', 20); if (!In.touch) $('#paint').classList.add('show'); }
-      document.body.classList.toggle('paint-able', me.role === 'hider');
+      else { hint('🎨 Vẽ ngụy trang lên nhân vật rồi bấm Xong để đi tìm chỗ nấp (' + (In.touch ? 'nút 🎨' : 'phím E') + ' mở lại xưởng). Người đi tìm không nhìn thấy bạn lúc này.', 20); }
+      document.body.classList.toggle('paint-able', me.role === 'hider'); if (me.role === 'hider') setTimeout(openStudio, 350);
     } else if (e.phase === 'hunt') {
-      $('#blind').classList.remove('show'); $('#paint').classList.remove('show'); document.body.classList.remove('paint-able');
+      closeStudio(); $('#blind').classList.remove('show'); document.body.classList.remove('paint-able');
       A.ui('go'); banner('TRUY TÌM!', 1500);
       if (me.role === 'seeker') { hint('Nghe tiếng kêu: to = gần, nhỏ = xa. Tường làm tiếng nhỏ và đục. Ná bay theo đường cong, hãy ngắm đón đầu!', 10); $('#cross').style.display = 'block'; }
-      else hint('Giữ yên và cúi (C) để im lặng · chạy nước rút (Shift) khi bị phát hiện · mỗi 5 giây bạn phát một tiếng kêu!', 10);
+      else hint('Giữ yên: cúi (C) hoặc nằm sấp (Z) để khó bị thấy · chạy nước rút (Shift) khi bị phát hiện · mỗi 5 giây bạn phát một tiếng kêu!', 10);
     }
   }
   function onOver(r) {
@@ -214,9 +268,11 @@
     // điều khiển → ctl
     const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw), mv = In.move;
     const mx = sy * mv.y - cy * mv.x, mz = cy * mv.y + sy * mv.x;
-    const ctl = { mx, mz, sprint: In.sprint, crouch: In.crouch, fire: me.role === 'seeker' && In.fire && !paused };
+    const stance = m.studioOpen ? 0 : In.proneOn ? 2 : In.crouch ? 1 : 0;
+    const ctl = m.studioOpen ? { mx: 0, mz: 0, sprint: false, stance: 0, fire: false } : { mx, mz, sprint: In.sprint, stance, fire: me.role === 'seeker' && In.fire && !paused };
+    const skip = m.world.cut(me.x, me.y, me.z);                                  // mở mái khi vào nhà
     if (me.role === 'seeker' && sim.phase === 'hunt') {
-      const cp = camera.position, f = cam.fwd, d = UO.rayWorld(sim.map, cp.x, cp.y, cp.z, f.x, f.y, f.z, 70, 0.2);
+      const cp = camera.position, f = cam.fwd, d = UO.rayWorld(sim.map, cp.x, cp.y, cp.z, f.x, f.y, f.z, 70, 0.2, skip);
       ctl.px = cp.x + f.x * d; ctl.py = cp.y + f.y * d; ctl.pz = cp.z + f.z * d; ctl.adist = d;
     }
     sim.setCtl('me', ctl);
@@ -224,12 +280,20 @@
     // nhân vật
     const hideSeekers = me.role === 'hider' && sim.phase === 'prep', hideHiders = me.role === 'seeker' && sim.phase === 'prep';
     for (const [id, av] of m.avatars) {
-      const p = av.p; av.sync(dt, sim, !p.present || (p.role === 'seeker' && hideSeekers) || (p.role === 'hider' && hideHiders));
+      const p = av.p, upstairs = skip && id !== 'me' && p.y + 0.1 >= skip.above && p.x >= skip.rect.x0 && p.x <= skip.rect.x1 && p.z >= skip.rect.z0 && p.z <= skip.rect.z1;
+      av.sync(dt, sim, !p.present || upstairs || (m.tooClose && id === m.camTarget) || (p.role === 'seeker' && hideSeekers) || (p.role === 'hider' && hideHiders));
     }
     // camera
     let tp = me; if (me.caught && m.spec) { const q = sim.players.get(m.spec); if (q && !q.caught) tp = q; else { const l = specList(); m.spec = l.length ? l[0].id : null; } }
-    cam.update(dt, camera, sim.map, tp.x, (tp.crouch ? 1.15 : 1.6), tp.z, me.role === 'seeker' && sim.phase === 'hunt' && !me.caught);
-    A.listener(tp.x, 1.5, tp.z, cam.fwd.x, cam.fwd.z);
+    if (m.studioOpen) cam.studioUpdate(dt, camera, me.x, me.y + 1.0, me.z);
+    else { const sk2 = tp === me ? skip : m.world.cut(tp.x, tp.y, tp.z); cam.update(dt, camera, sim.map, tp.x, tp.y + (tp.prone ? 0.7 : tp.crouch ? 1.15 : 1.6), tp.z, me.role === 'seeker' && sim.phase === 'hunt' && !me.caught, tp.y, sk2); }
+    m.camTarget = tp.id; m.tooClose = !m.studioOpen && cam.cur < 1.2;           // hành lang hẹp: camera sát mặt thì ẩn nhân vật (góc nhìn thứ nhất)
+    A.listener(tp.x, tp.y + 1.5, tp.z, cam.fwd.x, cam.fwd.z);
+    // gợi ý khi bị trần thấp chặn (gầm cầu thang)
+    if (!m.studioOpen && !me.caught && (mv.x || mv.y) && sim.t > m.lowAt && !(me.stance === 2)) {
+      const px = me.x + mx * 0.7, pz = me.z + mz * 0.7, g = UO.groundAt(sim.map, px, pz, me.y);
+      if (g.clear < UO.NEED[me.stance] && g.clear > UO.NEED[2]) { m.lowAt = sim.t + 3; toast('Trần thấp! Giữ C để cúi hoặc nhấn Z để bò', 1800); A.ui('lowceil'); }
+    }
     for (const [mesh, rad] of m.world.canopies) mesh.visible = mesh.position.distanceTo(camera.position) > rad + 0.7;   // tán cây không che camera
     m.fx.update(dt);
     m.world.sun.position.set(tp.x - 18, 34, tp.z + 14); m.world.sun.target.position.set(tp.x, 0, tp.z);
@@ -252,10 +316,8 @@
     else { const v = me.sprinting ? me.sprintLeft / C.HIDER.sprintTime : me.sprintCd > 0 ? 1 - me.sprintCd / C.HIDER.sprintCd : 1; bar.style.width = clamp(v, 0, 1) * 100 + '%'; barA.classList.toggle('cool', !me.sprinting && me.sprintCd > 0);
       if (ph === 'hunt' && !me.caught) { $('#barPFill').style.width = clamp(1 - (me.pingAt - sim.t) / C.PING.every, 0, 1) * 100 + '%'; } else $('#barPFill').style.width = '0%';
       m.pingFlash = Math.max(0, m.pingFlash - dt); $('#barP').classList.toggle('fire', m.pingFlash > 0); }
-    refreshPaintOnce();
+    $('#stanceTxt').textContent = me.caught ? '' : (me.stance === 2 ? '🛌 Nằm sấp' : me.stance === 1 ? '🧎 Cúi' : '🧍 Đứng') + (sim.map.levels.length > 1 ? ' · tầng ' + (sim.map.levelOf(me.y) + 1 > 3 ? 'sân thượng' : sim.map.levelOf(me.y) + 1) : '');
   }
-  let lastPaintKey = '';
-  function refreshPaintOnce() { const k = JSON.stringify(match.me.paint || null) + match.paintMode + match.zone; if (k !== lastPaintKey) { lastPaintKey = k; refreshPaintUI(); } }
 
   function frame(now) {
     requestAnimationFrame(frame);
@@ -265,13 +327,14 @@
 
   /* ---------- tạm dừng / điều khiển ---------- */
   function setPause(v) {
-    if (!match || match.over) return; paused = v; match.sim.paused = v; $('#pause').classList.toggle('show', v); In.enabled = !v;
+    if (!match || match.over) return; if (v && match.studioOpen && match.studio.live) match.studio.end(); paused = v; match.sim.paused = v; $('#pause').classList.toggle('show', v); In.enabled = !v;
     if (v) { skipPause = true; In.unlock(); setTimeout(() => { skipPause = false; }, 100); In.resetButtons(); }
   }
   function bindUI() {
     In.init(canvas);
     In.cb.look = (dx, dy) => { if (match && !paused) match.cam.rotate(dx, dy, In.sens * S.sens / 100); };
-    In.cb.zoom = (d) => { if (match) match.cam.zoom(d); };
+    In.cb.zoom = (d) => { if (match) match.cam.zoom(d, match.studioOpen); };
+    In.cb.undo = () => { if (match && match.studio) match.studio.undo(); }; In.cb.redo = () => { if (match && match.studio) match.studio.redo(); };
     In.cb.paint = togglePaint;
     In.cb.pause = () => { if (match && !match.over) setPause(!paused); };
     In.cb.lock = () => { if (!match || In.touch) return; if (In.locked) { skipPause = true; In.unlock(); setTimeout(() => { skipPause = false; }, 100); } else In.lock(); };
@@ -290,7 +353,7 @@
   }
 
   function boot() {
-    initMenu(); bindUI(); resize(); requestAnimationFrame(frame);
+    initMenu(); bindUI(); bindStudioPointer(); resize(); requestAnimationFrame(frame);
     $('#loading').classList.remove('show');
     UO.debug = { get match() { return match; }, startMatch, S };
   }

@@ -6,7 +6,7 @@
   <title>Ú òa – Trốn tìm 3D</title>
   <meta name="description" content="Ú òa – game trốn tìm 3D: ngụy trang bằng màu sắc, nghe tiếng kêu định vị và săn người bằng ná cao su.">
   <meta name="theme-color" content="#1b2a4a">
-  <link rel="stylesheet" href="./assets/style.css?v=1">
+  <link rel="stylesheet" href="./assets/style.css?v=2">
 </head>
 <body>
 <canvas id="view"></canvas>
@@ -56,6 +56,7 @@
   <div id="feed"></div>
   <div id="toast"></div>
   <div id="hint"></div>
+  <div id="stanceTxt"></div>
 
   <div id="bars">
     <div class="bar" id="barA"><label id="barALbl"></label><div><i id="barAFill"></i></div></div>
@@ -63,20 +64,29 @@
   </div>
 
   <div id="paint">
-    <div class="ptitle">🎨 Tô màu ngụy trang <button id="paintX" class="x">✕</button></div>
-    <div class="seg small" id="segPaint"><button data-v="quick" class="on">Nhanh · cả người</button><button data-v="adv">Từng vùng</button></div>
+    <div class="ptitle">🎨 Xưởng tô màu <button id="paintX" class="donebtn">Xong ✓</button></div>
+    <div class="seg small" id="segTool"><button data-v="paint" class="on">✏️ Vẽ</button><button data-v="rotate">🔄 Xoay</button></div>
+    <div class="lbl">Vùng cơ thể <small>(chỉ vẽ được vùng đang chọn)</small></div>
     <div id="zones" class="zones"></div>
+    <div class="seg small" id="segKind"><button data-v="hard" class="on">Cọ cứng</button><button data-v="soft">Cọ mềm</button><button data-v="dots">Chấm</button><button data-v="erase">Tẩy</button></div>
     <div id="swatches" class="sw"></div>
-    <div class="customrow"><label>Màu tùy chỉnh <input type="color" id="customColor" value="#7a8f5a"></label><button id="paintClear" class="ghost sm">Xóa màu</button></div>
-    <p class="note">Chọn màu giống vật thể quanh chỗ bạn trốn. Người đi tìm vẫn nhìn ra bạn nếu bạn lệch màu hoặc đang chạy.</p>
+    <div class="customrow"><label>Màu tùy chỉnh <input type="color" id="customColor" value="#7a8f5a"></label><input id="hexIn" class="hexin" maxlength="7" value="#7a8f5a" spellcheck="false" aria-label="Mã màu"></div>
+    <label class="sl"><span>Cỡ cọ</span><input type="range" id="brushSize" min="1" max="16" value="5"><b id="brushSizeV"></b></label>
+    <label class="sl"><span>Độ mờ</span><input type="range" id="brushOp" min="10" max="100" value="90"><b id="brushOpV"></b></label>
+    <div class="actrow"><button id="pUndo" class="ghost sm">↶ Hoàn tác</button><button id="pRedo" class="ghost sm">↷ Làm lại</button></div>
+    <div class="actrow"><button id="pFillZone" class="ghost sm">Đổ màu vùng</button><button id="pFillAll" class="ghost sm">Đổ cả người</button></div>
+    <div class="actrow"><button id="pClearZone" class="ghost sm">Xóa nét vùng</button><button id="pResetZone" class="ghost sm">Về màu gốc</button></div>
+    <p class="note" id="paintNote">Kéo chuột (hoặc ngón tay) trên nhân vật để vẽ. Chuột phải kéo / cuộn chuột để xoay và phóng to. Màu hợp với nền nơi bạn trốn sẽ khó bị thấy hơn.</p>
   </div>
-  <button id="bPaint" class="tbtn paintbtn">🎨</button>
+  <div id="brushRing"></div>
+  <button id="bPaint" class="tbtn paintbtn">🎨 Tô màu (E)</button>
 
   <div id="joy"><div id="joyKnob"></div></div>
   <div id="tbtns">
     <button id="bFire" class="tbtn fire">🎯</button>
     <button id="bSprint" class="tbtn">💨</button>
     <button id="bCrouch" class="tbtn">🧎</button>
+    <button id="bProne" class="tbtn">🛌</button>
   </div>
   <div id="lockHint">Nhấp vào màn hình để khóa chuột · Q: khóa/mở khóa</div>
 </div>
@@ -104,11 +114,12 @@
     <li><b>Ngụy trang 60 giây:</b> người đi trốn tô màu lên nhân vật và chạy đi tìm chỗ nấp. Người đi tìm nhắm mắt, hai phe không thấy nhau.</li>
     <li><b>Truy tìm 180 giây:</b> người đi tìm bắn ná cao su (hồi 2 giây, trúng là bắt). Cứ 5 giây mỗi người trốn phát một tiếng kêu — hãy nghe hướng và độ to để đoán chỗ.</li>
     <li>Người trốn thắng nếu còn ít nhất một người sống khi hết giờ. Người tìm thắng nếu bắt hết.</li>
-    <li>Cúi thấp thì im lặng và khó thấy hơn nhưng đi chậm. Chạy nước rút (5 giây, hồi 15 giây) nhanh hơn nhưng bước chân ồn.</li>
+    <li>Cúi thấp (giữ C) thì im lặng và khó thấy hơn nhưng đi chậm. <b>Nằm sấp (Z)</b> bò được sát đất, rất khó thấy và chui được gầm cầu thang, nhưng chỉ đi bằng 40% tốc độ và không bắn ná được. Chạy nước rút (5 giây, hồi 15 giây) nhanh hơn nhưng bước chân ồn.</li>
+    <li>Bản đồ <b>Chung Cư Ú Òa</b> có 3 tầng + sân thượng: lên xuống bằng cầu thang, tiếng và đạn bị sàn chắn. Khi vào nhà, các tầng phía trên tự ẩn đi để bạn nhìn rõ.</li>
   </ol>
   <div class="keys">
-    <div><b>PC</b> · WASD đi · Chuột phải (giữ) hoặc khóa chuột để xoay · Shift chạy · C cúi · Chuột trái / Space bắn · E mở bảng màu · Lăn chuột zoom · Esc tạm dừng</div>
-    <div><b>Điện thoại</b> · Cần trái đi · vuốt màn hình để xoay · 💨 chạy · 🧎 cúi · 🎯 bắn · 🎨 bảng màu</div>
+    <div><b>PC</b> · WASD đi · Chuột phải (giữ) hoặc khóa chuột để xoay · Shift chạy · C cúi · Z nằm/đứng dậy · Chuột trái / Space bắn · E mở xưởng tô màu (Ctrl+Z hoàn tác) · Lăn chuột zoom · Esc tạm dừng</div>
+    <div><b>Điện thoại</b> · Cần trái đi · vuốt màn hình để xoay · 💨 chạy · 🧎 cúi · 🛌 nằm · 🎯 bắn · 🎨 xưởng tô màu</div>
   </div>
   <button id="btnHelpX" class="big">Đã hiểu</button>
 </div></div>
@@ -125,6 +136,7 @@
 <script src="./assets/guns.js"></script>
 <script src="./assets/character.js"></script>
 <script src="./assets/render.js"></script>
+<script src="./assets/paint.js"></script>
 <script src="./assets/audio.js"></script>
 <script src="./assets/input.js"></script>
 <script src="./assets/game.js"></script>

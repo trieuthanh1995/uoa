@@ -2,9 +2,11 @@
 (function (UO) {
   'use strict';
   const keys = new Set();
-  const I = { move: { x: 0, y: 0 }, sprint: false, crouch: false, fire: false, sens: 0.0042, touch: false, cb: {}, locked: false, enabled: false };
+  const I = { move: { x: 0, y: 0 }, sprint: false, crouch: false, proneOn: false, studio: false, fire: false, sens: 0.0042, touch: false, cb: {}, locked: false, enabled: false };
   let canvas = null, rmb = false, lastX = 0, lastY = 0, joyId = null, lookId = null, joyC = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
   const btn = { fire: false, sprint: false, crouch: false };
+  const setProne = (v) => { I.proneOn = v; const b = document.querySelector('#bProne'); if (b) b.classList.toggle('on', v); };
+  I.setProne = setProne;
   const $ = (s) => document.querySelector(s);
 
   function recompute() {
@@ -22,7 +24,11 @@
     window.addEventListener('keydown', (e) => {
       if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
       if (e.code === 'Space' || e.code.startsWith('Arrow')) { if (I.enabled) e.preventDefault(); }
+      if (I.studio && (e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) I.cb.redo && I.cb.redo(); else I.cb.undo && I.cb.undo(); return; }
+      if (I.studio && (e.ctrlKey || e.metaKey) && e.code === 'KeyY') { e.preventDefault(); I.cb.redo && I.cb.redo(); return; }
       if (e.repeat) return; keys.add(e.code); recompute();
+      if (e.code === 'KeyZ' && I.enabled && !I.studio && !e.ctrlKey && !e.metaKey) setProne(!I.proneOn);
+      else if (I.proneOn && (e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'KeyC')) setProne(false);   // đứng dậy
       if (e.code === 'Space' || e.code === 'KeyF') { I.fire = true; }
       if (e.code === 'KeyE' && I.cb.paint) I.cb.paint();
       if (e.code === 'KeyQ' && I.cb.lock) I.cb.lock();
@@ -33,6 +39,7 @@
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('mousedown', (e) => {
       if (!I.enabled) return;
+      if (I.studio) { if (e.button === 2) { rmb = true; lastX = e.clientX; lastY = e.clientY; } return; }
       if (e.button === 2) { rmb = true; lastX = e.clientX; lastY = e.clientY; }
       else if (e.button === 0) { if (I.cb.click) I.cb.click(); I.fire = true; lastX = e.clientX; lastY = e.clientY; I.dragL = true; }
     });
@@ -57,14 +64,14 @@
       const end = (e) => { for (const t of e.changedTouches) if (t.identifier === joyId) { joyId = null; I.joy = null; knob.style.transform = ''; recompute(); } };
       joy.addEventListener('touchend', end); joy.addEventListener('touchcancel', end);
     }
-    canvas.addEventListener('touchstart', (e) => { if (!I.enabled) return; for (const t of e.changedTouches) if (lookId == null) { lookId = t.identifier; lookLast = { x: t.clientX, y: t.clientY }; } }, { passive: true });
+    canvas.addEventListener('touchstart', (e) => { if (!I.enabled || I.studio) return; for (const t of e.changedTouches) if (lookId == null) { lookId = t.identifier; lookLast = { x: t.clientX, y: t.clientY }; } }, { passive: true });
     canvas.addEventListener('touchmove', (e) => { for (const t of e.changedTouches) if (t.identifier === lookId) { I.cb.look && I.cb.look((t.clientX - lookLast.x) * 1.5, (t.clientY - lookLast.y) * 1.5); lookLast = { x: t.clientX, y: t.clientY }; } e.preventDefault(); }, { passive: false });
     const lend = (e) => { for (const t of e.changedTouches) if (t.identifier === lookId) lookId = null; };
     canvas.addEventListener('touchend', lend); canvas.addEventListener('touchcancel', lend);
-    for (const [id, k] of [['#bFire', 'fire'], ['#bSprint', 'sprint'], ['#bCrouch', 'crouch']]) {
+    for (const [id, k] of [['#bFire', 'fire'], ['#bSprint', 'sprint'], ['#bCrouch', 'crouch'], ['#bProne', 'prone']]) {
       const el = $(id); if (!el) continue;
-      const down = (e) => { e.preventDefault(); if (k === 'crouch') btn.crouch = !btn.crouch; else btn[k] = true; if (k === 'fire') I.fire = true; el.classList.toggle('on', btn[k]); recompute(); };
-      const up = (e) => { e.preventDefault(); if (k !== 'crouch') { btn[k] = false; el.classList.remove('on'); if (k === 'fire') I.fire = false; recompute(); } };
+      const down = (e) => { e.preventDefault(); if (k === 'prone') { setProne(!I.proneOn); return; } if (k === 'crouch') btn.crouch = !btn.crouch; else btn[k] = true; if (k === 'fire') I.fire = true; el.classList.toggle('on', btn[k]); recompute(); };
+      const up = (e) => { e.preventDefault(); if (k !== 'crouch' && k !== 'prone') { btn[k] = false; el.classList.remove('on'); if (k === 'fire') I.fire = false; recompute(); } };
       el.addEventListener('touchstart', down, { passive: false }); el.addEventListener('touchend', up, { passive: false }); el.addEventListener('touchcancel', up, { passive: false });
       el.addEventListener('mousedown', down); el.addEventListener('mouseup', up); el.addEventListener('mouseleave', up);
     }
@@ -72,6 +79,6 @@
   };
   I.lock = function () { if (!canvas || I.touch || I.locked) return; try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) { /* bỏ qua */ } };
   I.unlock = function () { if (document.pointerLockElement) document.exitPointerLock(); };
-  I.resetButtons = function () { btn.fire = btn.sprint = btn.crouch = false; ['#bFire', '#bSprint', '#bCrouch'].forEach((s) => { const e = $(s); if (e) e.classList.remove('on'); }); keys.clear(); I.fire = false; I.joy = null; recompute(); };
+  I.resetButtons = function () { btn.fire = btn.sprint = btn.crouch = false; setProne(false); ['#bFire', '#bSprint', '#bCrouch', '#bProne'].forEach((s) => { const e = $(s); if (e) e.classList.remove('on'); }); keys.clear(); I.fire = false; I.joy = null; recompute(); };
   UO.Input = I;
 })(window.UO = window.UO || {});

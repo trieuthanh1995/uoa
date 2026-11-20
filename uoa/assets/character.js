@@ -984,6 +984,7 @@
       cur.h.lerp(P.h, k); cur.q.slerp(P.q, k); cur.l.lerp(L, k);
       cur.hipsY = lerp(cur.hipsY, hipsY, k); cur.stance = lerp(cur.stance, stance, k); cur.stagger = lerp(cur.stagger, stagger, k);
       cur.coil = lerp(cur.coil, coil, k); cur.lean = lerp(cur.lean, lean, k); cur.throatW = lerp(cur.throatW, throatW, k);
+      if (s.headP != null) headP = s.headP;                               // [Ú òa] ngẩng đầu khi nằm sấp
       cur.headPitch = lerp(cur.headPitch, headP, k * 0.7);
       cur.sad = lerp(cur.sad, mode === 'sad' ? 1 : 0, k * 0.6);
       cur.mood = mode === 'celebrate' ? 1 : 0;
@@ -1213,38 +1214,50 @@
       ringMat.dispose(); ringFill.material.dispose();
     }
 
-    // ---- [Ú òa] Tô màu ngụy trang theo vùng (đầu / thân / tay / chân). Không đổi hình dáng nhân vật:
-    // vật liệu gốc được cache dùng chung nên mỗi mesh được gán bản sao riêng khi tô; setPaint(null) trả về nguyên bản.
+    // ---- [Ú òa] Tô màu ngụy trang theo vùng (đầu / thân / tay trái-phải / chân trái-phải). Không đổi hình dáng nhân vật.
+    // Vật liệu gốc được cache dùng chung nên mỗi mesh được gán bản sao/ texture riêng khi tô; setPaint(null) trả về nguyên bản.
     const zoneOf = new Map();
     const tagZone = (g, z) => g.traverse((o) => { if (o.isMesh && !zoneOf.has(o)) zoneOf.set(o, z); });
-    tagZone(head, 'head'); tagZone(armR.sh, 'arms'); tagZone(armL.sh, 'arms'); tagZone(legR.th, 'legs'); tagZone(legL.th, 'legs');
-    tagZone(chest, 'body'); tagZone(hips, 'legs');
+    tagZone(head, 'head'); tagZone(armR.sh, 'armR'); tagZone(armL.sh, 'armL'); tagZone(legR.th, 'legR'); tagZone(legL.th, 'legL');
+    tagZone(chest, 'body'); tagZone(hips, 'pelvis');
+    const BASE = { head: 'head', body: 'body', pelvis: 'legs', armL: 'arms', armR: 'arms', legL: 'legs', legR: 'legs' };
     const PAINTABLE = {
       head: new Set([mFur, mInner, mBelly]),
       body: new Set([mShirt, mShirtPlain, mAcc, mFur]),
       arms: new Set([mLimb, mShirt, mShirtPlain, mAcc, mFur]),
       legs: new Set([mShorts, mShortsPlain, mLimb, mShoe, mShoeAcc, mAcc, mFur, mWhite]),
     };
+    for (const [m, z] of zoneOf) m.userData.zone = z;
     const paintCache = new Map(); let paintNow = null;
-    function setPaint(p) {
+    function setPaint(p) {            // p = { head, body, arms, legs } (hex) – tô phẳng cả vùng
       paintNow = p || null;
       for (const [m, zone] of zoneOf) {
+        if (m.userData.painted) continue;                                  // mesh đã có texture cọ vẽ riêng thì không đụng
         if (!m.userData._orig) m.userData._orig = m.material;
-        const orig = m.userData._orig, c = p && p[zone];
-        if (!c || !PAINTABLE[zone].has(orig)) { m.material = orig; continue; }
+        const base = BASE[zone], orig = m.userData._orig, c = p && p[base];
+        if (!c || !PAINTABLE[base].has(orig)) { m.material = orig; continue; }
         const k = orig.uuid + c; let pm = paintCache.get(k);
-        if (!pm) {
-          pm = orig.clone(); pm.map = null; pm.color.set(lin(parseInt(String(c).replace('#', ''), 16) || 0)); pm.needsUpdate = true;
-          paintCache.set(k, pm);
-        }
+        if (!pm) { pm = orig.clone(); pm.map = null; pm.color.set(lin(parseInt(String(c).replace('#', ''), 16) || 0)); pm.needsUpdate = true; paintCache.set(k, pm); }
         m.material = pm;
       }
+    }
+    /** danh sách mesh có thể vẽ cọ (có UV, vật liệu thuộc vùng tô được): [{ mesh, zone, base, orig }] */
+    function getPaintables() {
+      const out = [];
+      for (const [m, zone] of zoneOf) {
+        if (!m.geometry || !m.geometry.attributes.uv) continue;
+        if (!m.userData._orig) m.userData._orig = m.material;
+        const orig = m.userData._orig, base = BASE[zone];
+        if (!PAINTABLE[base].has(orig) || !orig.isMeshStandardMaterial) continue;
+        out.push({ mesh: m, zone, base, orig });
+      }
+      return out;
     }
     const getPaint = () => paintNow;
     const disposePaint = () => { for (const m of paintCache.values()) m.dispose(); paintCache.clear(); };
 
     update(0, { x: 0, z: 0, mode: 'ready' });
-    return { root, update, swing, splitStep, lunge, react, getPaddleFaceWorld, getHandWorld, setHighlight, dispose() { disposePaint(); dispose(); }, id, team, setPaint, getPaint };
+    return { root, update, swing, splitStep, lunge, react, getPaddleFaceWorld, getHandWorld, setHighlight, dispose() { disposePaint(); dispose(); }, id, team, setPaint, getPaint, getPaintables };
   }
 
   // ------------------------------------------------------------------ khuôn mặt + đặc điểm loài

@@ -39,21 +39,21 @@
     let n = s; if (hp) { const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp; s.connect(f); n = f; } n.connect(g); g.connect(dest); s.start(t0); s.stop(t0 + dur + 0.05);
   }
   /** âm định vị 5 giây/lần của người trốn. g = độ lớn đã tính (khoảng cách + vật cản); walls = số vật chắn */
-  function ping(id, x, z, g, walls) {
+  function ping(id, x, z, g, walls, y) {
     if (!ensure() || g < 0.01) return; const t = ctx.currentTime + 0.005, base = 520 + (hash(id) % 9) * 55;
-    const out = panned(x, 1.2, z, Math.min(1.4, Math.pow(g, 0.7) * 1.5), walls ? Math.max(500, 2600 - walls * 1100) : 16000);
+    const out = panned(x, (y || 0) + 1.2, z, Math.min(1.4, Math.pow(g, 0.7) * 1.5), walls ? Math.max(500, 2600 - walls * 1100) : 16000);
     osc(out, 'triangle', base, base * 1.9, t, 0.28, 0.5); osc(out, 'sine', base * 2, base * 3.2, t + 0.07, 0.24, 0.22); osc(out, 'sine', base * 1.5, base * 2.2, t + 0.22, 0.2, 0.12);
   }
-  function step(x, z, g, sprint, walls) {
-    if (!ensure() || g < 0.015) return; const t = ctx.currentTime; const out = panned(x, 0.1, z, Math.min(1, g * (sprint ? 2.2 : 1.6)), walls ? 700 : 1800);
+  function step(x, z, g, sprint, walls, y) {
+    if (!ensure() || g < 0.015) return; const t = ctx.currentTime; const out = panned(x, (y || 0) + 0.1, z, Math.min(1, g * (sprint ? 2.2 : 1.6)), walls ? 700 : 1800);
     noise(out, t, sprint ? 0.09 : 0.06, sprint ? 0.6 : 0.4, 200); osc(out, 'sine', sprint ? 130 : 100, 60, t, 0.07, 0.3);
   }
-  function twang(x, z, near) {
-    if (!ensure()) return; const t = ctx.currentTime; const out = near ? sfx : panned(x, 1.3, z, 0.9, 6000);
+  function twang(x, z, near, y) {
+    if (!ensure()) return; const t = ctx.currentTime; const out = near ? sfx : panned(x, (y || 0) + 1.3, z, 0.9, 6000);
     osc(out, 'sawtooth', 520, 150, t, 0.16, 0.22); osc(out, 'square', 260, 90, t, 0.1, 0.1); noise(out, t, 0.08, 0.2, 2000);
   }
-  function thud(x, z, kind) {
-    if (!ensure()) return; const t = ctx.currentTime, out = panned(x, 0.6, z, 0.9, 5000);
+  function thud(x, z, kind, y) {
+    if (!ensure()) return; const t = ctx.currentTime, out = panned(x, (y == null ? 0.6 : y), z, 0.9, 5000);
     if (kind === 'hider') { osc(out, 'sine', 380, 90, t, 0.22, 0.55); osc(out, 'square', 700, 250, t, 0.12, 0.18); noise(out, t, 0.1, 0.3, 800); }
     else { noise(out, t, 0.09, 0.45, 600); osc(out, 'sine', 160, 60, t, 0.09, 0.3); }
   }
@@ -69,6 +69,7 @@
     else if (kind === 'lose') { [392, 349, 311, 262].forEach((f, i) => osc(sfx, 'sine', f, f * 0.98, t + i * 0.17, 0.4, 0.3)); }
     else if (kind === 'ready') osc(sfx, 'sine', 1200, 1500, t, 0.12, 0.2);
     else if (kind === 'sprint') { noise(sfx, t, 0.25, 0.25, 1500); }
+    else if (kind === 'lowceil') { osc(sfx, 'square', 180, 120, t, 0.12, 0.12); }
     else if (kind === 'click') osc(sfx, 'square', 700, 500, t, 0.05, 0.12);
     else if (kind === 'selfping') osc(sfx, 'sine', 900, 1500, t, 0.1, 0.1);
   }

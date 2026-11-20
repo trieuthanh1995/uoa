@@ -1,5 +1,6 @@
-/* Ú òa – lõi mô phỏng (trình duyệt + Node). Chỉ chứa luật chơi: di chuyển, pha trận, ná cao su, bắt người, âm thanh định vị.
- * Hệ tọa độ: mặt đất là (x, z), y hướng lên. Hướng yaw: hướng đi = (sin yaw, cos yaw).
+/* Ú òa – lõi mô phỏng (trình duyệt + Node). Chỉ chứa luật chơi: di chuyển (nhiều tầng, 3 tư thế), pha trận, ná cao su, bắt người, âm thanh định vị.
+ * Hệ tọa độ: mặt đất là (x, z), y hướng lên (độ cao chân). Hướng yaw: hướng đi = (sin yaw, cos yaw).
+ * Bản đồ: hộp/trụ có độ cao nền o.y (mặc định 0) + `surfaces` (sàn phẳng hoặc dốc cầu thang). Mặt đất y=0 luôn có.
  * Sim phát sự kiện vào hàng đợi drain(): phase, ping, step, fire, stone_end, catch, over, sprint, role. */
 (function (root, factory) {
   const isNode = typeof module === 'object' && module.exports;
@@ -9,7 +10,10 @@
   'use strict';
   const { C, LEVELS } = cfg;
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-  const TALL = 1.0;                       // vật cao từ mức này chắn tầm nhìn, tiếng và đạn
+  const STEP_UP = 0.55, SLAB_T = 0.3;
+  const HEIGHT = [C.H_STAND, C.H_CROUCH, C.H_PRONE];           // chiều cao thân theo tư thế (đứng, cúi, nằm)
+  const NEED = [1.9, 1.15, 0.55];                              // độ thoáng đầu tối thiểu để ở tư thế đó
+  const CENTER = [1.0, 0.65, 0.25];                            // độ cao trọng tâm để bot ngắm / kiểm tra tầm nhìn
   const rngOf = (a) => () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 
   /* ================= màu ================= */
@@ -19,13 +23,42 @@
     const dr = (a >> 16 & 255) - (b >> 16 & 255), dg = (a >> 8 & 255) - (b >> 8 & 255), db = (a & 255) - (b & 255);
     return Math.sqrt(dr * dr + dg * dg + db * db) / 441.7;
   }
-  function mixHex(list) {           // list: [[hex, weight], …]
+  function mixHex(list) {
     let r = 0, g = 0, b = 0, w = 0;
     for (const [c, k] of list) { const n = hexNum(c); r += (n >> 16 & 255) * k; g += (n >> 8 & 255) * k; b += (n & 255) * k; w += k; }
     return ((Math.round(r / w) << 16) | (Math.round(g / w) << 8) | Math.round(b / w)) >>> 0;
   }
 
+  /* ================= chuẩn bị bản đồ (tầng, bề mặt) ================= */
+  function prepMap(map) {
+    if (map._prep) return map; map._prep = true;
+    map.surfaces = map.surfaces || []; map.buildings = map.buildings || [];
+    const set = new Set([0]);
+    for (const s of map.surfaces) { set.add(+s.y0.toFixed(2)); set.add(+s.y1.toFixed(2)); }
+    map.levels = [...set].sort((a, b) => a - b);
+    const li = (y) => { let bi = 0; for (let k = 1; k < map.levels.length; k++) if (Math.abs(map.levels[k] - y) < Math.abs(map.levels[bi] - y)) bi = k; return bi; };
+    map.levelOf = li;
+    map.surfaces.forEach((s, i) => { s.id = i; s.la = li(s.y0); s.lb = li(s.y1); });
+    map.ramps = map.surfaces.filter((s) => s.y0 !== s.y1);
+    return map;
+  }
+  const covers = (s, x, z) => x >= s.x0 - 1e-6 && x <= s.x1 + 1e-6 && z >= s.z0 - 1e-6 && z <= s.z1 + 1e-6;
+  function fracOf(s, x, z) {
+    let t; switch (s.dir) { case 'x+': t = (x - s.x0) / (s.x1 - s.x0); break; case 'x-': t = (s.x1 - x) / (s.x1 - s.x0); break; case 'z+': t = (z - s.z0) / (s.z1 - s.z0); break; default: t = (s.z1 - z) / (s.z1 - s.z0); }
+    return clamp(t, 0, 1);
+  }
+  const heightAt = (s, x, z) => (s.dir ? s.y0 + (s.y1 - s.y0) * fracOf(s, x, z) : s.y0);
+  /** nền đứng được tại (x,z) cho người đang ở độ cao y: độ cao mặt đứng + khoảng trần phía trên */
+  function groundAt(map, x, z, y) {
+    let h = 0; const S = map.surfaces;
+    for (let i = 0; i < S.length; i++) { const s = S[i]; if (covers(s, x, z)) { const hs = heightAt(s, x, z); if (hs <= y + STEP_UP && hs > h) h = hs; } }
+    let ceil = Infinity;
+    for (let i = 0; i < S.length; i++) { const s = S[i]; if (covers(s, x, z)) { const b = heightAt(s, x, z) - SLAB_T; if (b > h + 0.05 && b < ceil) ceil = b; } }
+    return { h, clear: ceil - h };
+  }
+
   /* ================= hình học ================= */
+  const oy = (o) => o.y || 0;
   function pushOutBox(o, x, z, r) {
     const hx = o.w / 2, hz = o.d / 2, cx = clamp(x, o.x - hx, o.x + hx), cz = clamp(z, o.z - hz, o.z + hz);
     const dx = x - cx, dz = z - cz, d2 = dx * dx + dz * dz;
@@ -39,18 +72,17 @@
     if (d2 >= rr * rr) return null;
     const d = Math.sqrt(d2) || 1e-6; return [dx / d * (rr - d), dz / d * (rr - d)];
   }
-  /** Đẩy vòng tròn (x,z,r) ra khỏi mọi vật cản và giữ trong ranh giới */
-  function resolve(map, p, r) {
+  /** Đẩy vòng tròn (x,z,r) ra khỏi vật cản có độ cao chồng với thân người [y+0.4, y+hgt] và giữ trong ranh giới */
+  function resolve(map, p, r, y, hgt) {
+    y = y || 0; hgt = hgt || C.H_STAND; const lo = y + 0.4, hi = y + hgt;
     for (let it = 0; it < 3; it++) {
-      for (const o of map.boxes) { const v = pushOutBox(o, p.x, p.z, r); if (v) { p.x += v[0]; p.z += v[1]; } }
-      for (const o of map.circles) { const v = pushOutCircle(o, p.x, p.z, r); if (v) { p.x += v[0]; p.z += v[1]; } }
+      for (const o of map.boxes) { const b = oy(o); if (b + o.h <= lo || b >= hi) continue; const v = pushOutBox(o, p.x, p.z, r); if (v) { p.x += v[0]; p.z += v[1]; } }
+      for (const o of map.circles) { const b = oy(o); if (b + o.h <= lo || b >= hi) continue; const v = pushOutCircle(o, p.x, p.z, r); if (v) { p.x += v[0]; p.z += v[1]; } }
     }
     p.x = clamp(p.x, -map.HW + r, map.HW - r); p.z = clamp(p.z, -map.HD + r, map.HD - r);
   }
-  /** đoạn 2D (a→b) cắt hộp? trả về t vào (0..1) hoặc -1 */
   function segBox2(ax, az, bx, bz, o) {
-    const hx = o.w / 2, hz = o.d / 2; let t0 = 0, t1 = 1;
-    const dx = bx - ax, dz = bz - az;
+    const hx = o.w / 2, hz = o.d / 2; let t0 = 0, t1 = 1; const dx = bx - ax, dz = bz - az;
     for (const [p, q, lo, hi] of [[ax, dx, o.x - hx, o.x + hx], [az, dz, o.z - hz, o.z + hz]]) {
       if (Math.abs(q) < 1e-9) { if (p < lo || p > hi) return -1; continue; }
       let u = (lo - p) / q, v = (hi - p) / q; if (u > v) { const s = u; u = v; v = s; }
@@ -66,114 +98,156 @@
     const s = Math.sqrt(disc), t = (-b - s) / (2 * a);
     if (t >= 0 && t <= 1) return t; if (c <= 0) return 0; return -1;
   }
-  /** Số vật cao chắn giữa hai điểm (để tính tường làm nhỏ tiếng và che tầm nhìn) */
-  function blockersBetween(map, ax, az, bx, bz, minH) {
-    minH = minH == null ? TALL : minH; let n = 0;
-    for (const o of map.boxes) if (o.h >= minH && segBox2(ax, az, bx, bz, o) >= 0) n++;
-    for (const o of map.circles) if (o.h >= minH && segCircle2(ax, az, bx, bz, o) >= 0) n++;
-    return n;
+  /** đoạn 3D cắt hộp: trả về t vào (0..1) hoặc -1; pad mở rộng hộp (bán kính đạn) */
+  function segBox3(ax, ay, az, bx, by, bz, o, pad) {
+    pad = pad || 0; const lo = [o.x - o.w / 2 - pad, oy(o) - pad, o.z - o.d / 2 - pad], hi = [o.x + o.w / 2 + pad, oy(o) + o.h + pad, o.z + o.d / 2 + pad];
+    const O = [ax, ay, az], D = [bx - ax, by - ay, bz - az]; let t0 = 0, t1 = 1;
+    for (let i = 0; i < 3; i++) {
+      if (Math.abs(D[i]) < 1e-9) { if (O[i] < lo[i] || O[i] > hi[i]) return -1; continue; }
+      let u = (lo[i] - O[i]) / D[i], v = (hi[i] - O[i]) / D[i]; if (u > v) { const q = u; u = v; v = q; }
+      t0 = Math.max(t0, u); t1 = Math.min(t1, v); if (t0 > t1) return -1;
+    }
+    return t0;
   }
-  /** tia 3D tới vật cản (dùng cho camera / điểm ngắm). Trả về khoảng cách tới điểm chạm đầu tiên hoặc maxT */
-  function rayWorld(map, ox, oy, oz, dx, dy, dz, maxT, minH) {
+  /** số bề mặt (sàn/trần/dốc) mà đoạn 3D cắt qua (lấy mẫu) */
+  function surfaceHits(map, ax, ay, az, bx, by, bz) {
+    const S = map.surfaces; if (!S.length) return 0;
+    const len = Math.hypot(bx - ax, by - ay, bz - az), n = Math.max(2, Math.ceil(len / 0.3)); let hit = 0; const seen = new Set();
+    for (let k = 0; k <= n; k++) {
+      const t = k / n, x = ax + (bx - ax) * t, y = ay + (by - ay) * t, z = az + (bz - az) * t;
+      for (let i = 0; i < S.length; i++) { const s = S[i]; if (seen.has(i) || !covers(s, x, z)) continue; const hs = heightAt(s, x, z); if (y <= hs + 0.02 && y >= hs - SLAB_T - 0.02) { seen.add(i); hit++; } }
+    }
+    return hit;
+  }
+  /** số vật chắn giữa hai điểm 3D (tường/đồ vật/sàn). Dùng cho tầm nhìn và tiếng */
+  function blockers3(map, ax, ay, az, bx, by, bz) {
+    let n = 0;
+    for (const o of map.boxes) if (segBox3(ax, ay, az, bx, by, bz, o) >= 0) n++;
+    for (const o of map.circles) { const t = segCircle2(ax, az, bx, bz, o, 0); if (t >= 0) { const y = ay + (by - ay) * t, b = oy(o); if (y >= b && y <= b + o.h) n++; } }
+    return n + surfaceHits(map, ax, ay, az, bx, by, bz);
+  }
+  /** tương thích bản cũ: hai điểm cùng độ cao ngang ngực ở tầng trệt */
+  const blockersBetween = (map, ax, az, bx, bz, minH, ay, by) => blockers3(map, ax, ay == null ? 1.0 : ay, az, bx, by == null ? 1.0 : by, bz);
+  /** tia 3D tới vật cản (camera / điểm ngắm). skip = { above, rect }: bỏ qua vật nằm trên độ cao `above` trong `rect` (mở mái khi vào nhà) */
+  function rayWorld(map, ox, oy_, oz, dx, dy, dz, maxT, minH, skip) {
     minH = minH || 0; let best = maxT;
-    const ex = ox + dx * maxT, ey = oy + dy * maxT, ez = oz + dz * maxT;
+    const ex = ox + dx * maxT, ey = oy_ + dy * maxT, ez = oz + dz * maxT;
+    const skipIt = (bottom, x, z) => skip && bottom >= skip.above && (!skip.rect || (x >= skip.rect.x0 && x <= skip.rect.x1 && z >= skip.rect.z0 && z <= skip.rect.z1));
     for (const o of map.boxes) {
-      const lo = [o.x - o.w / 2, 0, o.z - o.d / 2], hi = [o.x + o.w / 2, o.h, o.z + o.d / 2];
-      if (o.h < minH) continue;
-      const O = [ox, oy, oz], D = [dx, dy, dz]; let t0 = 0, t1 = maxT, ok = true;
-      for (let i = 0; i < 3; i++) {
-        if (Math.abs(D[i]) < 1e-9) { if (O[i] < lo[i] || O[i] > hi[i]) { ok = false; break; } continue; }
-        let u = (lo[i] - O[i]) / D[i], v = (hi[i] - O[i]) / D[i]; if (u > v) { const s = u; u = v; v = s; }
-        t0 = Math.max(t0, u); t1 = Math.min(t1, v); if (t0 > t1) { ok = false; break; }
-      }
-      if (ok && t0 < best) best = t0;
+      if (o.h < minH || skipIt(oy(o), o.x, o.z)) continue;
+      const t = segBox3(ox, oy_, oz, ex, ey, ez, o, 0); if (t >= 0 && t * maxT < best) best = t * maxT;
     }
     for (const o of map.circles) {
-      if (o.h < minH) continue;
+      if (o.h < minH || skipIt(oy(o), o.x, o.z)) continue;
       const t = segCircle2(ox, oz, ex, ez, o, 0);
-      if (t >= 0) { const y = oy + (ey - oy) * t; if (y >= 0 && y <= o.h && t * maxT < best) best = t * maxT; }
+      if (t >= 0) { const y = oy_ + (ey - oy_) * t, b = oy(o); if (y >= b && y <= b + o.h && t * maxT < best) best = t * maxT; }
     }
-    if (dy < -1e-6) { const t = -oy / dy; if (t > 0 && t < best) best = t; }
+    const S = map.surfaces;
+    if (S.length) {
+      const n = Math.max(2, Math.ceil(Math.min(best, maxT) / 0.25));
+      for (let k = 1; k <= n; k++) {
+        const t = k / n * Math.min(best, maxT), x = ox + dx * t, y = oy_ + dy * t, z = oz + dz * t; let hit = false;
+        for (let i = 0; i < S.length && !hit; i++) { const s = S[i]; if (!covers(s, x, z)) continue; const hs = heightAt(s, x, z); if (skipIt(hs - SLAB_T, (s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2)) continue; if (y <= hs && y >= hs - SLAB_T - 0.15) hit = true; }
+        if (hit) { if (t < best) best = t; break; }
+      }
+    }
+    if (dy < -1e-6) { const t = -oy_ / dy; if (t > 0 && t < best) best = t; }
     return best;
   }
 
-  /* ================= lưới đường đi (bot) ================= */
+  /* ================= lưới đường đi nhiều tầng (bot) ================= */
+  class Heap {
+    constructor() { this.a = []; }
+    push(f, k) { const a = this.a; a.push([f, k]); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (a[p][0] <= a[i][0]) break; [a[p], a[i]] = [a[i], a[p]]; i = p; } }
+    pop() { const a = this.a, top = a[0], last = a.pop(); if (a.length) { a[0] = last; let i = 0; for (;;) { let l = 2 * i + 1, r = l + 1, m = i; if (l < a.length && a[l][0] < a[m][0]) m = l; if (r < a.length && a[r][0] < a[m][0]) m = r; if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } } return top; }
+    get size() { return this.a.length; }
+  }
   class Nav {
     constructor(map, cell) {
-      this.map = map; this.cs = cell || 0.75;
-      this.W = Math.ceil(2 * map.HW / this.cs); this.H = Math.ceil(2 * map.HD / this.cs);
-      this.blocked = new Uint8Array(this.W * this.H);
-      const r = C.PLAYER_R + 0.12, tmp = { x: 0, z: 0 };
-      for (let j = 0; j < this.H; j++) for (let i = 0; i < this.W; i++) {
-        const x = -map.HW + (i + 0.5) * this.cs, z = -map.HD + (j + 0.5) * this.cs;
-        let b = Math.abs(x) > map.HW - r || Math.abs(z) > map.HD - r;
-        if (!b) for (const o of map.boxes) if (pushOutBox(o, x, z, r)) { b = true; break; }
-        if (!b) for (const o of map.circles) if (pushOutCircle(o, x, z, r)) { b = true; break; }
-        this.blocked[j * this.W + i] = b ? 1 : 0;
-      }
-      this.comp = new Int32Array(this.W * this.H).fill(-1); this.mainComp = -1; this._components();
-    }
-    idx(x, z) { const i = clamp(Math.floor((x + this.map.HW) / this.cs), 0, this.W - 1), j = clamp(Math.floor((z + this.map.HD) / this.cs), 0, this.H - 1); return j * this.W + i; }
-    pos(k) { return [-this.map.HW + ((k % this.W) + 0.5) * this.cs, -this.map.HD + (Math.floor(k / this.W) + 0.5) * this.cs]; }
-    free(x, z) { return !this.blocked[this.idx(x, z)]; }
-    _components() {
-      let id = 0, bestN = 0; const W = this.W, H = this.H;
-      for (let s = 0; s < W * H; s++) {
-        if (this.blocked[s] || this.comp[s] >= 0) continue;
-        const st = [s]; this.comp[s] = id; let n = 0;
-        while (st.length) {
-          const k = st.pop(); n++; const i = k % W, j = (k / W) | 0;
-          for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-            const a = i + di, b = j + dj; if (a < 0 || b < 0 || a >= W || b >= H) continue; const q = b * W + a;
-            if (!this.blocked[q] && this.comp[q] < 0) { this.comp[q] = id; st.push(q); }
-          }
+      prepMap(map); this.map = map; this.cs = cell || 0.6; this.L = map.levels.length;
+      this.W = Math.ceil(2 * map.HW / this.cs); this.H = Math.ceil(2 * map.HD / this.cs); this.N = this.W * this.H;
+      this.blocked = new Uint8Array(this.L * this.N).fill(1); this.ramp = new Int16Array(this.L * this.N).fill(-1); this.hgt = new Float32Array(this.L * this.N);
+      const r = C.PLAYER_R + 0.04;
+      for (let k = 0; k < this.L; k++) {
+        const e = map.levels[k];
+        for (let j = 0; j < this.H; j++) for (let i = 0; i < this.W; i++) {
+          const x = -map.HW + (i + 0.5) * this.cs, z = -map.HD + (j + 0.5) * this.cs, id = k * this.N + j * this.W + i;
+          if (Math.abs(x) > map.HW - r || Math.abs(z) > map.HD - r) continue;
+          let y = e, ok = false;
+          const g = groundAt(map, x, z, e + 0.05); if (Math.abs(g.h - e) < 0.06 && g.clear >= 1.95) ok = true;
+          for (const s of map.ramps) if (covers(s, x, z)) { const t = fracOf(s, x, z), kk = t < 0.5 ? s.la : s.lb; if (kk === k) { ok = true; this.ramp[id] = s.id; y = heightAt(s, x, z); } }
+          if (!ok) continue;
+          this.hgt[id] = y; const lo = y + 0.4, hi = y + 1.75; let blk = false;
+          for (const o of map.boxes) { const b = oy(o); if (b + o.h <= lo || b >= hi) continue; if (pushOutBox(o, x, z, r)) { blk = true; break; } }
+          if (!blk) for (const o of map.circles) { const b = oy(o); if (b + o.h <= lo || b >= hi) continue; if (pushOutCircle(o, x, z, r)) { blk = true; break; } }
+          this.blocked[id] = blk ? 1 : 0;
         }
+      }
+      this.comp = new Int32Array(this.L * this.N).fill(-1); this.mainComp = -1; this._components();
+    }
+    cellOf(x, z) { return clamp(Math.floor((z + this.map.HD) / this.cs), 0, this.H - 1) * this.W + clamp(Math.floor((x + this.map.HW) / this.cs), 0, this.W - 1); }
+    pos(id) { const c = id % this.N; return [-this.map.HW + ((c % this.W) + 0.5) * this.cs, -this.map.HD + (Math.floor(c / this.W) + 0.5) * this.cs]; }
+    levelOfId(id) { return Math.floor(id / this.N); }
+    idx(x, z, k) { return (k || 0) * this.N + this.cellOf(x, z); }
+    free(x, z, k) { const id = this.idx(x, z, k); return !this.blocked[id]; }
+    /** các ô kề (kể cả nối tầng qua dốc) */
+    each(id, fn) {
+      const k = Math.floor(id / this.N), c = id % this.N, i = c % this.W, j = (c / this.W) | 0, W = this.W, H = this.H, base = k * this.N, h0 = this.hgt[id];
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        if (!di && !dj) continue; const a = i + di, b = j + dj; if (a < 0 || b < 0 || a >= W || b >= H) continue;
+        const q = base + b * W + a; if (this.blocked[q] || Math.abs(this.hgt[q] - h0) > STEP_UP) continue;
+        if (di && dj && (this.blocked[base + j * W + a] || this.blocked[base + b * W + i])) continue;
+        fn(q, di && dj ? 1.4142 : 1);
+      }
+      const rid = this.ramp[id];
+      if (rid >= 0) {                                        // sang tầng kia của cùng một cầu thang
+        const s = this.map.surfaces[rid], k2 = k === s.la ? s.lb : s.la;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const a = i + di, b = j + dj; if (a < 0 || b < 0 || a >= W || b >= H) continue; const q = k2 * this.N + b * W + a; if (!this.blocked[q] && this.ramp[q] === rid && Math.abs(this.hgt[q] - h0) <= STEP_UP) fn(q, 1); }
+      }
+    }
+    _components() {
+      let id = 0, bestN = 0;
+      for (let s = 0; s < this.comp.length; s++) {
+        if (this.blocked[s] || this.comp[s] >= 0) continue; const st = [s]; this.comp[s] = id; let n = 0;
+        while (st.length) { const k = st.pop(); n++; this.each(k, (q) => { if (this.comp[q] < 0) { this.comp[q] = id; st.push(q); } }); }
         if (n > bestN) { bestN = n; this.mainComp = id; } id++;
       }
     }
-    nearestFree(x, z) {
-      const k = this.idx(x, z); if (!this.blocked[k] && this.comp[k] === this.mainComp) return [x, z];
-      const W = this.W; const i0 = k % W, j0 = (k / W) | 0;
-      for (let R = 1; R < 14; R++) for (let j = j0 - R; j <= j0 + R; j++) for (let i = i0 - R; i <= i0 + R; i++) {
+    nearestFree(x, z, k) {
+      k = k || 0; const id = this.idx(x, z, k); if (!this.blocked[id] && this.comp[id] === this.mainComp) return [x, z, id];
+      const base = k * this.N, c = id % this.N, W = this.W, i0 = c % W, j0 = (c / W) | 0;
+      for (let R = 1; R < 16; R++) for (let j = j0 - R; j <= j0 + R; j++) for (let i = i0 - R; i <= i0 + R; i++) {
         if (i < 0 || j < 0 || i >= W || j >= this.H) continue; if (Math.max(Math.abs(i - i0), Math.abs(j - j0)) !== R) continue;
-        const q = j * W + i; if (!this.blocked[q] && this.comp[q] === this.mainComp) return this.pos(q);
+        const q = base + j * W + i; if (!this.blocked[q] && this.comp[q] === this.mainComp) { const p = this.pos(q); return [p[0], p[1], q]; }
       }
-      return [x, z];
+      return [x, z, id];
     }
-    /** đoạn thẳng đi được (lấy mẫu theo ô) */
-    clear(ax, az, bx, bz) {
+    clear(k, ax, az, bx, bz) {
       const d = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.ceil(d / (this.cs * 0.45)));
-      for (let s = 0; s <= n; s++) { const t = s / n; if (this.blocked[this.idx(ax + (bx - ax) * t, az + (bz - az) * t)]) return false; }
+      for (let s = 0; s <= n; s++) { const t = s / n; if (this.blocked[k * this.N + this.cellOf(ax + (bx - ax) * t, az + (bz - az) * t)]) return false; }
       return true;
     }
-    /** A* 8 hướng; trả về danh sách điểm [x,z] đã làm thẳng, hoặc null */
-    path(ax, az, bx, bz) {
-      const W = this.W, H = this.H; const [sx, sz] = this.nearestFree(ax, az), [gx, gz] = this.nearestFree(bx, bz);
-      const s = this.idx(sx, sz), g = this.idx(gx, gz); if (s === g) return [[gx, gz]];
-      const G = new Float32Array(W * H).fill(1e9), from = new Int32Array(W * H).fill(-1), closed = new Uint8Array(W * H);
-      const open = [[0, s]]; G[s] = 0; const [tx, tz] = [g % W, (g / W) | 0];
-      const hh = (k) => { const dx = Math.abs((k % W) - tx), dz = Math.abs(((k / W) | 0) - tz); return (dx + dz) + (1.4142 - 2) * Math.min(dx, dz); };
+    /** A*; (ay, by) là độ cao chân xuất phát / đích. Trả về danh sách điểm [x,z] đã làm thẳng hoặc null */
+    path(ax, az, ay, bx, bz, by) {
+      const map = this.map, ka = map.levelOf(ay || 0), kb = map.levelOf(by || 0);
+      const [sx, sz, s] = this.nearestFree(ax, az, ka), [gx, gz, g] = this.nearestFree(bx, bz, kb); if (s === g) return [[gx, gz]];
+      const G = new Float32Array(this.comp.length).fill(1e9), from = new Int32Array(this.comp.length).fill(-1), closed = new Uint8Array(this.comp.length);
+      const heap = new Heap(); G[s] = 0; heap.push(0, s); const [tx, tz] = this.pos(g), gk = this.levelOfId(g);
+      const hh = (q) => { const p = this.pos(q); return (Math.hypot(p[0] - tx, p[1] - tz) / this.cs) + Math.abs(this.levelOfId(q) - gk) * 2; };
       let guard = 0;
-      while (open.length && guard++ < 60000) {
-        let bi = 0; for (let q = 1; q < open.length; q++) if (open[q][0] < open[bi][0]) bi = q;
-        const [, k] = open[bi]; open[bi] = open[open.length - 1]; open.pop();
-        if (k === g) break; if (closed[k]) continue; closed[k] = 1;
-        const i = k % W, j = (k / W) | 0;
-        for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
-          if (!di && !dj) continue; const a = i + di, b = j + dj; if (a < 0 || b < 0 || a >= W || b >= H) continue;
-          const q = b * W + a; if (this.blocked[q] || closed[q]) continue;
-          if (di && dj && (this.blocked[j * W + a] || this.blocked[b * W + i])) continue;
-          const ng = G[k] + (di && dj ? 1.4142 : 1);
-          if (ng < G[q]) { G[q] = ng; from[q] = k; open.push([ng + hh(q), q]); }
-        }
+      while (heap.size && guard++ < 200000) {
+        const [, k] = heap.pop(); if (k === g) break; if (closed[k]) continue; closed[k] = 1;
+        this.each(k, (q, c) => { if (closed[q]) return; const ng = G[k] + c; if (ng < G[q]) { G[q] = ng; from[q] = k; heap.push(ng + hh(q), q); } });
       }
       if (from[g] < 0) return null;
-      const pts = []; for (let k = g; k !== s && k >= 0; k = from[k]) pts.push(this.pos(k)); pts.reverse();
-      // làm thẳng đường đi
+      const nodes = []; for (let k = g; k !== s && k >= 0; k = from[k]) nodes.push(k); nodes.reverse();
       const out = []; let cx = sx, cz = sz, i = 0;
-      while (i < pts.length) {
-        let j = pts.length - 1; while (j > i && !this.clear(cx, cz, pts[j][0], pts[j][1])) j--;
-        out.push(pts[j]); cx = pts[j][0]; cz = pts[j][1]; i = j + 1;
+      while (i < nodes.length) {
+        const n = nodes[i], lv = this.levelOfId(n);
+        if (this.ramp[n] >= 0) { const p = this.pos(n); out.push([p[0], p[1]]); cx = p[0]; cz = p[1]; i++; continue; }
+        let j = i; while (j + 1 < nodes.length && this.levelOfId(nodes[j + 1]) === lv && this.ramp[nodes[j + 1]] < 0) j++;
+        while (j > i) { const p = this.pos(nodes[j]); if (this.clear(lv, cx, cz, p[0], p[1])) break; j--; }
+        const p = this.pos(nodes[j]); out.push([p[0], p[1]]); cx = p[0]; cz = p[1]; i = j + 1;
       }
       out[out.length - 1] = [gx, gz]; return out;
     }
@@ -182,10 +256,10 @@
   function navOf(map) { let n = navCache.get(map.id); if (!n) { n = new Nav(map); navCache.set(map.id, n); } return n; }
 
   /* ================= nghe âm thanh ================= */
-  /** độ lớn (0..1) mà người nghe (lx,lz) nghe được nguồn (sx,sz) có tầm range; mỗi vật cao xen giữa nhân với wallLoss */
-  function hearGain(map, lx, lz, sx, sz, range, gain0) {
-    const d = Math.hypot(sx - lx, sz - lz); if (d >= range) return { gain: 0, walls: 0, d };
-    const walls = blockersBetween(map, lx, lz, sx, sz);
+  /** độ lớn (0..1) người nghe (lx,ly,lz) nghe nguồn (sx,sy,sz): suy giảm theo khoảng cách 3D; mỗi vật cao/sàn xen giữa nhân với wallLoss */
+  function hearGain(map, lx, ly, lz, sx, sy, sz, range, gain0) {
+    const d = Math.hypot(sx - lx, sy - ly, sz - lz); if (d >= range) return { gain: 0, walls: 0, d };
+    const walls = blockers3(map, lx, ly + 1.5, lz, sx, sy + 1.0, sz);
     const fall = 1 / (1 + (d / 6) * (d / 6) * 0.5);
     return { gain: (gain0 == null ? 1 : gain0) * fall * Math.pow(C.PING.wallLoss, Math.min(walls, 4)) * (1 - d / range), walls, d };
   }
@@ -194,35 +268,32 @@
   class Sim {
     /** opts: { mapId, players:[{id,name,char,isBot,level,base}], seekers, roleMode:'random'|'seeker'|'hider', meId, seed } */
     constructor(opts) {
-      this.map = maps.mapOf(opts.mapId); this.nav = navOf(this.map);
+      this.map = prepMap(maps.mapOf(opts.mapId)); this.nav = navOf(this.map);
       this.seed = opts.seed >>> 0 || 1; this.R = rngOf(this.seed);
       this.events = []; this.acc = 0; this.t = 0; this.phase = 'lobby'; this.phaseT = 0; this.phaseDur = 0;
       this.players = new Map(); this.stones = []; this.stoneId = 1; this.result = null; this.paused = false;
       const n = clamp(opts.players.length, C.MIN_PLAYERS, C.MAX_PLAYERS);
       this.seekerCount = clamp(opts.seekers | 0, 1, n - 1);
-      let order = opts.players.slice(0, n).map((p) => p);
-      const meIdx = order.findIndex((p) => p.id === opts.meId);
-      const seekIdx = new Set();
+      const order = opts.players.slice(0, n);
+      const meIdx = order.findIndex((p) => p.id === opts.meId), seekIdx = new Set();
       if (opts.roleMode === 'seeker' && meIdx >= 0) seekIdx.add(meIdx);
       const pool = order.map((_, i) => i).filter((i) => !(opts.roleMode === 'hider' && i === meIdx) && !seekIdx.has(i));
       for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(this.R() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
       while (seekIdx.size < this.seekerCount && pool.length) seekIdx.add(pool.shift());
-      const hs = this.shuffle(this.map.spawns.hider.slice()), ss = this.map.spawns.seeker.slice();
-      let hi = 0, si = 0;
+      const hs = this.shuffle(this.map.spawns.hider.slice()), ss = this.map.spawns.seeker.slice(); let hi = 0, si = 0;
       order.forEach((p, i) => {
         const role = seekIdx.has(i) ? 'seeker' : 'hider', sp0 = role === 'seeker' ? ss[si++ % ss.length] : hs[hi++ % hs.length];
-        const sp = this.nav.nearestFree(sp0[0], sp0[1]);      // điểm xuất phát luôn nằm ở chỗ trống
-        const lv = LEVELS[p.level] || LEVELS.normal;
+        const sp = this.nav.nearestFree(sp0[0], sp0[1], 0), lv = LEVELS[p.level] || LEVELS.normal;
         this.players.set(p.id, {
           id: p.id, name: p.name, char: p.char, isBot: !!p.isBot, level: lv, base: p.base == null ? 0xcccccc : p.base, role,
-          x: sp[0], z: sp[1], vx: 0, vz: 0, yaw: role === 'seeker' ? 0 : this.R() * 6.28, crouch: false, caught: false, caughtAt: -1, present: true,
-          sprintLeft: C.HIDER.sprintTime, sprintCd: 0, sprinting: false, fireCd: 0, pingAt: 1e9, stride: 0, paint: null,
-          ctl: { mx: 0, mz: 0, sprint: false, crouch: false, fire: false, ax: 0, ay: 0, az: 1, adist: 30 },
+          x: sp[0], z: sp[1], y: 0, vy: 0, vx: 0, vz: 0, yaw: role === 'seeker' ? 0 : this.R() * 6.28,
+          stance: 0, crouch: false, prone: false, trans: 0, caught: false, caughtAt: -1, present: true,
+          sprintLeft: C.HIDER.sprintTime, sprintCd: 0, sprinting: false, fireCd: 0, pingAt: 1e9, stride: 0, paint: null, art: null,
+          ctl: { mx: 0, mz: 0, sprint: false, stance: 0, fire: false, ax: 0, ay: 0, az: 1, adist: 30 },
           stat: { catches: 0, caughtT: 0, shots: 0, hits: 0 }, mem: {},
         });
       });
       this.order = order.map((p) => p.id);
-      // vùng không được ẩn nấp quanh chỗ xuất phát của người đi tìm (dùng trong giai đoạn ngụy trang)
       const sk = [...this.players.values()].filter((p) => p.role === 'seeker');
       this.pen = { x: sk.reduce((a, p) => a + p.x, 0) / sk.length, z: sk.reduce((a, p) => a + p.z, 0) / sk.length, r: 4.5 };
       this.ai = null;
@@ -235,36 +306,35 @@
     drain() { const e = this.events; this.events = []; return e; }
     setCtl(id, c) { const p = this.players.get(id); if (p) Object.assign(p.ctl, c); }
     canPaint() { return this.phase === 'intro' || this.phase === 'prep'; }
-    setPaint(id, paint) {
+    /** paint: màu trung bình từng vùng (head/body/arms/legs) dùng để tính độ ngụy trang; art: dữ liệu nét vẽ gốc (để đồng bộ về sau) */
+    setPaint(id, paint, art) {
       const p = this.players.get(id); if (!p || p.role !== 'hider' || !this.canPaint()) return false;
-      p.paint = paint ? Object.assign({}, paint) : null; return true;
+      p.paint = paint ? Object.assign({}, paint) : null; if (art !== undefined) p.art = art; return true;
     }
     start() { this.setPhase('intro', C.INTRO); for (const p of this.players.values()) this.emit({ t: 'role', id: p.id, role: p.role }); }
     setPhase(ph, dur) {
       this.phase = ph; this.phaseT = 0; this.phaseDur = dur || 0;
-      if (ph === 'hunt') {
-        const hs = this.hiders, n = hs.length || 1;
-        hs.forEach((p, i) => { p.pingAt = this.t + (C.PING.stagger ? (i + 0.5) / n * C.PING.every : C.PING.every) ; });
-      }
+      if (ph === 'hunt') { const hs = this.hiders, n = hs.length || 1; hs.forEach((p, i) => { p.pingAt = this.t + (C.PING.stagger ? (i + 0.5) / n * C.PING.every : C.PING.every); }); }
       this.emit({ t: 'phase', phase: ph, dur: this.phaseDur });
     }
-    /** màu trung bình ngụy trang của người trốn (vùng chưa tô lấy màu gốc) */
     paintAvg(p) {
       const z = p.paint || {}; const g = (k) => (z[k] ? hexNum(z[k]) : p.base);
       return mixHex([[g('body'), 0.42], [g('head'), 0.2], [g('arms'), 0.14], [g('legs'), 0.24]]);
     }
-    /** màu nền xung quanh (vật cao gần nhất trong 3 m, nếu không có thì màu sàn) */
-    backdrop(x, z) {
-      let best = 3.0, col = this.map.floor;
-      for (const o of this.map.boxes) { if (o.h < 0.8) continue; const cx = clamp(x, o.x - o.w / 2, o.x + o.w / 2), cz = clamp(z, o.z - o.d / 2, o.z + o.d / 2), d = Math.hypot(x - cx, z - cz); if (d < best) { best = d; col = o.c; } }
-      for (const o of this.map.circles) { if (o.h < 0.8 || o.k === 'pond') continue; const d = Math.hypot(x - o.x, z - o.z) - o.r; if (d < best) { best = d; col = o.c2 != null ? o.c2 : o.c; } }
+    /** màu nền xung quanh: vật cùng tầng gần nhất trong 3 m, nếu không có thì màu sàn */
+    backdrop(x, z, y) {
+      y = y || 0; let best = 3.0, col = this.map.floor;
+      for (const o of this.map.boxes) { const b = oy(o); if (o.h < 0.8 || b > y + 1.5 || b + o.h < y + 0.6) continue; const cx = clamp(x, o.x - o.w / 2, o.x + o.w / 2), cz = clamp(z, o.z - o.d / 2, o.z + o.d / 2), d = Math.hypot(x - cx, z - cz); if (d < best) { best = d; col = o.c; } }
+      for (const o of this.map.circles) { const b = oy(o); if (o.h < 0.8 || o.k === 'pond' || b > y + 1.5 || b + o.h < y + 0.6) continue; const d = Math.hypot(x - o.x, z - o.z) - o.r; if (d < best) { best = d; col = o.c2 != null ? o.c2 : o.c; } }
+      if (y > 0.3) { for (const s of this.map.surfaces) if (covers(s, x, z) && Math.abs(heightAt(s, x, z) - y) < 0.4 && best > 2.9) { col = s.c; break; } }
       return { col, dist: best };
     }
     /** 0 = hòa lẫn hoàn toàn … 1 = nổi bật hẳn */
     conspicuity(p) {
-      const bd = this.backdrop(p.x, p.z), cd = cdist(this.paintAvg(p), bd.col), near = clamp(1 - bd.dist / 3, 0, 1);
+      const bd = this.backdrop(p.x, p.z, p.y), cd = cdist(this.paintAvg(p), bd.col), near = clamp(1 - bd.dist / 3, 0, 1);
       return clamp(1 - (1 - clamp(cd / 0.5, 0, 1)) * (0.35 + 0.65 * near), 0.12, 1);
     }
+    centerY(p) { return p.y + CENTER[p.stance]; }
 
     update(dt) {
       if (this.paused || this.phase === 'lobby') return;
@@ -282,84 +352,89 @@
       for (const p of this.players.values()) if (p.present) this.movePlayer(p, dt);
       if (ph === 'hunt') { this.pings(); this.updateStones(dt); }
     }
+    /** đổi tư thế nếu đủ chỗ (độ thoáng đầu) và không đang chuyển tư thế */
+    setStance(p, want) {
+      if (want === p.stance || p.trans > 0) return;
+      if (want < p.stance) { const g = groundAt(this.map, p.x, p.z, p.y); if (g.clear < NEED[want]) { p.mem.lowCeil = this.t; return; } }
+      const toFrom = (want === 2 || p.stance === 2);
+      p.trans = toFrom ? C.PRONE.transition : 0.15; p.stance = want; p.crouch = want === 1; p.prone = want === 2;
+      if (want !== 0) { p.sprinting = false; }
+    }
     movePlayer(p, dt) {
-      const c = p.ctl, ph = this.phase;
-      p.fireCd = Math.max(0, p.fireCd - dt); p.sprintCd = Math.max(0, p.sprintCd - dt);
+      const c = p.ctl, ph = this.phase, map = this.map;
+      p.fireCd = Math.max(0, p.fireCd - dt); p.sprintCd = Math.max(0, p.sprintCd - dt); p.trans = Math.max(0, p.trans - dt);
       let can = !p.caught && ph !== 'over' && ph !== 'intro';
-      if (p.role === 'seeker' && ph === 'prep') can = false;           // người đi tìm nhắm mắt đếm giờ
+      if (p.role === 'seeker' && ph === 'prep') can = false;
       const isH = p.role === 'hider';
-      p.crouch = can && !!c.crouch;
+      if (can) this.setStance(p, c.stance != null ? c.stance : (c.crouch ? 1 : 0));
+      else if (p.caught) { p.stance = 0; p.crouch = p.prone = false; }
       let mx = can ? c.mx : 0, mz = can ? c.mz : 0; const ml = Math.hypot(mx, mz); if (ml > 1) { mx /= ml; mz /= ml; }
       let sp = isH ? C.HIDER.walk : C.SEEKER.walk;
       if (isH) {
-        if (p.sprinting) { p.sprintLeft -= dt; if (p.sprintLeft <= 0 || !c.sprint || p.crouch || ml < 0.1) { p.sprinting = false; if (p.sprintLeft <= 0) { p.sprintLeft = 0; } p.sprintCd = Math.max(p.sprintCd, C.HIDER.sprintCd); } }
-        if (!p.sprinting && c.sprint && can && ml > 0.1 && !p.crouch && p.sprintCd <= 0 && ph === 'hunt') { p.sprinting = true; p.sprintLeft = C.HIDER.sprintTime; this.emit({ t: 'sprint', id: p.id }); }
+        if (p.sprinting) { p.sprintLeft -= dt; if (p.sprintLeft <= 0 || !c.sprint || p.stance !== 0 || ml < 0.1) { p.sprinting = false; if (p.sprintLeft <= 0) p.sprintLeft = 0; p.sprintCd = Math.max(p.sprintCd, C.HIDER.sprintCd); } }
+        if (!p.sprinting && c.sprint && can && ml > 0.1 && p.stance === 0 && p.trans <= 0 && p.sprintCd <= 0 && ph === 'hunt') { p.sprinting = true; p.sprintLeft = C.HIDER.sprintTime; this.emit({ t: 'sprint', id: p.id }); }
         if (!p.sprinting && p.sprintCd <= 0) p.sprintLeft = C.HIDER.sprintTime;
-        if (p.sprinting) sp = C.HIDER.sprint; if (p.crouch) sp *= C.HIDER.crouch;
-      } else if (p.crouch) sp *= C.SEEKER.crouch;
+        if (p.sprinting) sp = C.HIDER.sprint;
+      }
+      if (p.stance === 1) sp *= isH ? C.HIDER.crouch : C.SEEKER.crouch; else if (p.stance === 2) sp *= C.PRONE.speed;
+      if (p.trans > 0) sp *= 0.25;
       sp *= (p.isBot ? p.level.speed : 1);
-      p.vx = mx * sp; p.vz = mz * sp;
-      const ox = p.x, oz = p.z; p.x += p.vx * dt; p.z += p.vz * dt;
-      resolve(this.map, p, C.PLAYER_R);
-      if (isH && ph === 'prep') {            // không ẩn trong khu người đi tìm xuất phát
+      const ox = p.x, oz = p.z, ovy = p.y, hgt = HEIGHT[p.stance], need = NEED[p.stance];
+      // thử đi; nếu đầu chạm trần (gầm cầu thang) thì thử trượt theo từng trục
+      const tryMove = (nx, nz) => { const q = { x: nx, z: nz }; resolve(map, q, C.PLAYER_R, p.y, hgt); const g = groundAt(map, q.x, q.z, p.y); if (g.clear < need) return null; return [q.x, q.z, g.h]; };
+      const nx = p.x + mx * sp * dt, nz = p.z + mz * sp * dt;
+      let r = tryMove(nx, nz) || tryMove(nx, p.z) || tryMove(p.x, nz);
+      if (r) { p.x = r[0]; p.z = r[1]; const gh = r[2]; if (gh >= p.y) { p.y = gh; p.vy = 0; } else { p.vy -= 22 * dt; p.y = Math.max(gh, p.y + p.vy * dt); if (p.y === gh) p.vy = 0; } }
+      else if (!(mx || mz) || true) { const g = groundAt(map, p.x, p.z, p.y); if (g.h < p.y - 1e-4) { p.vy -= 22 * dt; p.y = Math.max(g.h, p.y + p.vy * dt); } }
+      if (isH && ph === 'prep') {
         const dx = p.x - this.pen.x, dz = p.z - this.pen.z, d = Math.hypot(dx, dz);
-        if (d < this.pen.r) { const k = this.pen.r / (d || 1e-6); p.x = this.pen.x + dx * k; p.z = this.pen.z + dz * k; resolve(this.map, p, C.PLAYER_R); }
+        if (d < this.pen.r) { const k = this.pen.r / (d || 1e-6); p.x = this.pen.x + dx * k; p.z = this.pen.z + dz * k; resolve(map, p, C.PLAYER_R, p.y, hgt); }
       }
       const moved = Math.hypot(p.x - ox, p.z - oz);
-      p.vx = (p.x - ox) / dt; p.vz = (p.z - oz) / dt;
-      if (moved > 1e-4) { const want = Math.atan2(p.vx, p.vz); let d = want - p.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); p.yaw += d * Math.min(1, dt * 14); }
-      // tiếng bước chân (cúi thì im lặng)
-      if (isH && can && !p.crouch && moved > 1e-4 && ph === 'hunt') {
-        p.stride += moved; const L = p.sprinting ? 1.5 : 1.1;
-        if (p.stride >= L) { p.stride = 0; this.emit({ t: 'step', id: p.id, x: p.x, z: p.z, sprint: p.sprinting }); }
+      p.vx = (p.x - ox) / dt; p.vz = (p.z - oz) / dt; void ovy;
+      if (moved > 1e-4 && (mx || mz)) { const want = Math.atan2(p.vx, p.vz); let d = want - p.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); p.yaw += d * Math.min(1, dt * 14); }
+      if (isH && can && p.stance !== 1 && moved > 1e-4 && ph === 'hunt') {      // cúi = im lặng; nằm = rất khẽ
+        p.stride += moved; const L = p.sprinting ? 1.5 : p.stance === 2 ? 0.7 : 1.1;
+        if (p.stride >= L) { p.stride = 0; this.emit({ t: 'step', id: p.id, x: p.x, y: p.y, z: p.z, sprint: p.sprinting, soft: p.stance === 2 }); }
       }
       if (can && ph === 'hunt' && p.role === 'seeker' && c.fire) this.tryFire(p);
     }
     tryFire(p) {
-      if (p.fireCd > 0) return false;
+      if (p.fireCd > 0 || p.stance === 2 || p.trans > 0) return false;     // không bắn ná khi đang nằm / đang đổi tư thế
       const c = p.ctl, S = C.SLING; p.fireCd = S.cd; p.stat.shots++;
-      const ox = p.x, oy = S.muzzleY, oz = p.z;
+      const ox = p.x, oy_ = p.y + (p.stance === 1 ? 0.95 : S.muzzleY), oz = p.z;
       let dx = c.ax, dy = c.ay, dz = c.az; const L = Math.hypot(dx, dy, dz) || 1; dx /= L; dy /= L; dz /= L;
-      // điểm ngắm = điểm tia camera chạm; đạn bắn từ nòng tới đó và được bù độ rơi để trúng đúng tâm nếu mục tiêu đứng yên
       const ad = clamp(c.adist || 30, 3, S.range);
-      let px = c.px != null ? c.px : ox + dx * ad, py = c.py != null ? c.py : oy + dy * ad, pz = c.pz != null ? c.pz : oz + dz * ad;
-      let vx = px - ox, vy = py - oy, vz = pz - oz; const D = Math.hypot(vx, vy, vz) || 1; vx /= D; vy /= D; vz /= D;
-      const T = D / S.speed, comp = 0.5 * S.gravity * T * T / D;      // bù độ rơi (xấp xỉ bay thẳng)
+      const px = c.px != null ? c.px : ox + dx * ad, py = c.py != null ? c.py : oy_ + dy * ad, pz = c.pz != null ? c.pz : oz + dz * ad;
+      let vx = px - ox, vy = py - oy_, vz = pz - oz; const D = Math.hypot(vx, vy, vz) || 1; vx /= D; vy /= D; vz /= D;
+      const T = D / S.speed, comp = 0.5 * S.gravity * T * T / D;
       vy += comp; const L2 = Math.hypot(vx, vy, vz); vx /= L2; vy /= L2; vz /= L2;
-      const st = { id: this.stoneId++, owner: p.id, x: ox + vx * 0.5, y: oy + vy * 0.5, z: oz + vz * 0.5, vx: vx * S.speed, vy: vy * S.speed, vz: vz * S.speed, age: 0, dist: 0 };
+      const st = { id: this.stoneId++, owner: p.id, x: ox + vx * 0.5, y: oy_ + vy * 0.5, z: oz + vz * 0.5, vx: vx * S.speed, vy: vy * S.speed, vz: vz * S.speed, age: 0, dist: 0 };
       this.stones.push(st); p.yaw = Math.atan2(vx, vz);
       this.emit({ t: 'fire', id: p.id, sid: st.id, x: st.x, y: st.y, z: st.z, vx: st.vx, vy: st.vy, vz: st.vz });
       return true;
     }
     updateStones(dt) {
-      const S = C.SLING, keep = [];
+      const S = C.SLING, keep = [], map = this.map;
       for (const s of this.stones) {
         const n = 2, h = dt / n; let dead = false;
         for (let k = 0; k < n && !dead; k++) {
           const ax = s.x, ay = s.y, az = s.z; s.vy -= S.gravity * h;
           const bx = ax + s.vx * h, by = ay + s.vy * h, bz = az + s.vz * h; let bestT = 2, kind = null, who = null;
-          // vật cản
-          for (const o of this.map.boxes) {
-            if (o.h < 0.2) continue;
-            const lo = [o.x - o.w / 2 - S.r, -S.r, o.z - o.d / 2 - S.r], hi = [o.x + o.w / 2 + S.r, o.h + S.r, o.z + o.d / 2 + S.r];
-            const O = [ax, ay, az], D = [bx - ax, by - ay, bz - az]; let t0 = 0, t1 = 1, ok = true;
-            for (let i = 0; i < 3; i++) {
-              if (Math.abs(D[i]) < 1e-9) { if (O[i] < lo[i] || O[i] > hi[i]) { ok = false; break; } continue; }
-              let u = (lo[i] - O[i]) / D[i], v = (hi[i] - O[i]) / D[i]; if (u > v) { const q = u; u = v; v = q; }
-              t0 = Math.max(t0, u); t1 = Math.min(t1, v); if (t0 > t1) { ok = false; break; }
-            }
-            if (ok && t0 < bestT) { bestT = t0; kind = 'wall'; }
-          }
-          for (const o of this.map.circles) {
-            if (o.h < 0.2) continue; const t = segCircle2(ax, az, bx, bz, o, S.r);
-            if (t >= 0 && t < bestT) { const y = ay + (by - ay) * t; if (y >= -S.r && y <= o.h + S.r) { bestT = t; kind = 'wall'; } }
+          for (const o of map.boxes) { if (o.h < 0.2) continue; const t = segBox3(ax, ay, az, bx, by, bz, o, S.r); if (t >= 0 && t < bestT) { bestT = t; kind = 'wall'; } }
+          for (const o of map.circles) { if (o.h < 0.2) continue; const t = segCircle2(ax, az, bx, bz, o, S.r); if (t >= 0 && t < bestT) { const y = ay + (by - ay) * t, b = oy(o); if (y >= b - S.r && y <= b + o.h + S.r) { bestT = t; kind = 'wall'; } } }
+          // sàn / trần / cầu thang: đạn cắt qua mặt phẳng (có độ dày)
+          for (const sf of map.surfaces) {
+            const mx2 = (ax + bx) / 2, mz2 = (az + bz) / 2; if (!covers(sf, mx2, mz2) && !covers(sf, ax, az) && !covers(sf, bx, bz)) continue;
+            const ha = heightAt(sf, ax, az), hb = heightAt(sf, bx, bz), da = ay - ha, db = by - hb, ta = ay - (ha - SLAB_T), tb = by - (hb - SLAB_T);
+            let t = -1; if (da > 0 && db <= 0) t = da / (da - db); else if (ta < 0 && tb >= 0) t = ta / (ta - tb); else if (da <= 0 && ta >= 0 && (covers(sf, ax, az))) t = 0;
+            if (t >= 0 && t < bestT) { const cx = ax + (bx - ax) * t, cz = az + (bz - az) * t; if (covers(sf, cx, cz)) { bestT = t; kind = 'wall'; } }
           }
           if (by <= 0 && by < ay) { const t = ay / (ay - by); if (t < bestT) { bestT = t; kind = 'ground'; } }
-          // người đi trốn (hình trụ)
           for (const q of this.players.values()) {
             if (q.role !== 'hider' || q.caught || !q.present) continue;
             const t = segCircle2(ax, az, bx, bz, { x: q.x, z: q.z, r: C.PLAYER_R + S.r }, 0);
-            if (t >= 0 && t < bestT) { const y = ay + (by - ay) * t, hh = q.crouch ? C.H_CROUCH : C.H_STAND; if (y >= 0 && y <= hh) { bestT = t; kind = 'hider'; who = q; } }
+            if (t >= 0 && t < bestT) { const y = ay + (by - ay) * t; if (y >= q.y && y <= q.y + HEIGHT[q.stance]) { bestT = t; kind = 'hider'; who = q; } }
           }
           if (kind) {
             s.x = ax + (bx - ax) * bestT; s.y = Math.max(0, ay + (by - ay) * bestT); s.z = az + (bz - az) * bestT; dead = true;
@@ -383,16 +458,11 @@
     pings() {
       for (const p of this.hiders) {
         if (p.caught) continue;
-        while (this.t >= p.pingAt) {
-          p.pingAt += C.PING.every;
-          this.emit({ t: 'ping', id: p.id, x: p.x, z: p.z, gain: p.crouch ? C.PING.crouchGain : 1 });
-        }
+        while (this.t >= p.pingAt) { p.pingAt += C.PING.every; this.emit({ t: 'ping', id: p.id, x: p.x, y: p.y, z: p.z, gain: p.stance === 2 ? C.PING.proneGain : p.stance === 1 ? C.PING.crouchGain : 1 }); }
       }
     }
-    /** rời trận (mất kết nối / thoát). Cập nhật số người còn lại và xác định kết quả hợp lệ */
     leave(id) {
-      const p = this.players.get(id); if (!p || !p.present) return; p.present = false;
-      this.emit({ t: 'left', id });
+      const p = this.players.get(id); if (!p || !p.present) return; p.present = false; this.emit({ t: 'left', id });
       if (this.phase === 'over' || this.phase === 'lobby') return;
       if (!this.seekers.length) this.finish('hiders', 'seekersleft');
       else if (!this.hiders.length || this.hidersLeft() === 0) this.finish(this.hiders.length ? 'seekers' : 'hiders', this.hiders.length ? 'allcaught' : 'hidersleft');
@@ -409,5 +479,5 @@
       this.result = res; this.phase = 'over'; this.phaseT = 0; this.emit({ t: 'over', result: res });
     }
   }
-  return { Sim, Nav, navOf, hearGain, blockersBetween, rayWorld, resolve, cdist, mixHex, hexNum, TALL };
+  return { Sim, Nav, navOf, prepMap, groundAt, heightAt, covers, hearGain, blockers3, blockersBetween, rayWorld, resolve, cdist, mixHex, hexNum, HEIGHT, NEED, CENTER, STEP_UP, SLAB_T };
 });

@@ -11,9 +11,9 @@
   const rng = (a) => () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 
   function Builder(seed) {
-    const b = { boxes: [], circles: [], R: rng(seed) };
-    b.box = (x, z, w, d, h, c, tex, k) => { b.boxes.push({ x, z, w, d, h, c, tex: tex || 'solid', k: k || 'prop' }); };
-    b.cir = (x, z, r, h, c, k, c2) => { b.circles.push({ x, z, r, h, c, k: k || 'pillar', c2 }); };
+    const b = { boxes: [], circles: [], surfaces: [], buildings: [], y: 0, R: rng(seed) };
+    b.box = (x, z, w, d, h, c, tex, k) => { const o = { x, z, w, d, h, c, tex: tex || 'solid', k: k || 'prop' }; if (b.y) o.y = b.y; b.boxes.push(o); };
+    b.cir = (x, z, r, h, c, k, c2) => { const o = { x, z, r, h, c, k: k || 'pillar', c2 }; if (b.y) o.y = b.y; b.circles.push(o); };
     // tường thẳng trục x hoặc z, có cửa: gaps = [[từ, đến]] tính theo khoảng cách dọc tường
     b.wall = (x0, z0, x1, z1, t, h, c, tex, gaps) => {
       const horiz = Math.abs(z1 - z0) < 1e-6, len = horiz ? Math.abs(x1 - x0) : Math.abs(z1 - z0);
@@ -43,9 +43,26 @@
       b.box(0, -hd - t / 2, 2 * hw + 2 * t, t, h, c, 'plank', 'fence'); b.box(0, hd + t / 2, 2 * hw + 2 * t, t, h, c, 'plank', 'fence');
       b.box(-hw - t / 2, 0, t, 2 * hd, h, c, 'plank', 'fence'); b.box(hw + t / 2, 0, t, 2 * hd, h, c, 'plank', 'fence');
     };
+    /** bề mặt đi được: phẳng (y0 = y1) hoặc dốc/cầu thang (dir = hướng đi lên: 'x+','x-','z+','z-') */
+    b.surf = (x0, z0, x1, z1, y0, y1, dir, c, tex, k) => { b.surfaces.push({ x0, z0, x1, z1, y0, y1, dir: y0 === y1 ? null : dir, c, tex: tex || 'solid', k: k || (y0 === y1 ? 'floor' : 'stairs') }); };
+    /** sàn chữ nhật có lỗ (lỗ cầu thang): tách thành các chữ nhật không chồng nhau */
+    b.slab = (x0, z0, x1, z1, y, holes, c, tex, k) => {
+      holes = holes || []; const xs = [x0, x1], zs = [z0, z1];
+      for (const h of holes) { for (const x of [h[0], h[2]]) if (x > x0 && x < x1) xs.push(x); for (const z of [h[1], h[3]]) if (z > z0 && z < z1) zs.push(z); }
+      xs.sort((a, c2) => a - c2); zs.sort((a, c2) => a - c2);
+      for (let j = 0; j < zs.length - 1; j++) {
+        let runStart = null;
+        for (let i = 0; i <= xs.length - 1; i++) {
+          const inHole = i < xs.length - 1 && holes.some((h) => (xs[i] + xs[i + 1]) / 2 > h[0] && (xs[i] + xs[i + 1]) / 2 < h[2] && (zs[j] + zs[j + 1]) / 2 > h[1] && (zs[j] + zs[j + 1]) / 2 < h[3]);
+          const degenerate = i < xs.length - 1 && xs[i + 1] - xs[i] < 1e-6;
+          if (i < xs.length - 1 && !inHole && !degenerate) { if (runStart == null) runStart = xs[i]; }
+          if ((i === xs.length - 1 || inHole) && runStart != null) { const endX = xs[i]; b.surf(runStart, zs[j], endX, zs[j + 1], y, y, null, c, tex, k || 'floor'); runStart = null; }
+        }
+      }
+    };
     return b;
   }
-  const out = (b, o) => Object.assign({ boxes: b.boxes, circles: b.circles }, o);
+  const out = (b, o) => Object.assign({ boxes: b.boxes, circles: b.circles, surfaces: b.surfaces, buildings: b.buildings }, o);
 
   /* ------------------------------------------------------------------ 1. Khu Phố Nhỏ */
   function street() {
@@ -242,7 +259,120 @@
     });
   }
 
-  const MAPS = [street(), market(), park(), warehouse()];
+
+  /* ------------------------------------------------------------------ 5. Chung Cư Ú Òa (nhiều tầng) */
+  function tower() {
+    const b = Builder(71), HW = 32, HD = 24, Hh = 3.4, T = 0.3, WH = 3.1;
+    b.fence(HW, HD, 2.6, 0x7b8794);
+    const X0 = -16, X1 = 8, Z0 = -14, Z1 = 6, CZ0 = -4.85, CZ1 = -3.15;
+    const colEx = [0xf0d9b5, 0xb7d7b0, 0xb6d4ef];                 // màu tường ngoài theo tầng
+    const floorC = [0x9aa0a6, 0xd9c8a0, 0xcfd8dc, 0xb9bec4];
+    const DOORS = [[0.4, 2.1], [8.3, 10.0], [16.4, 18.1]];       // cửa phòng ↔ hành lang (cùng vị trí 2 phía)
+    // ---- cầu thang trong hành lang: mỗi dốc có chiếu nghỉ ở đầu trên và sảnh trống ở đầu dưới
+    const RAMPS = [
+      [-13.8, CZ0, -9.4, CZ1, 0, 3.4, 'x-'],        // A: tầng trệt → tầng 2 (đầu tây, chiếu nghỉ ở sát tường tây)
+      [2.6, CZ0, 7.0, CZ1, 0, 3.4, 'x-'],           // B: tầng trệt → tầng 2 (vào từ cửa phía đông)
+      [-5.8, CZ0, -1.4, CZ1, 3.4, 6.8, 'x+'],       // C: tầng 2 → tầng 3
+      [1.8, -13.2, 6.2, -11.4, 6.8, 10.2, 'x+'],    // E: tầng 3 → sân thượng (trong phòng đông bắc)
+    ];
+    for (const r of RAMPS) b.surf(r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0xa58b6a, 'plank', 'stairs');
+    // ---- sàn các tầng (có lỗ cho cầu thang)
+    const SZ = [X0 - 0.15, Z0 - 0.15, X1 + 0.15, Z1 + 0.15];
+    b.slab(SZ[0], SZ[1], SZ[2], SZ[3], 3.4, [[-13.8, CZ0, -9.4, CZ1], [2.6, CZ0, 7.0, CZ1]], floorC[1], 'plank', 'floor');
+    b.slab(SZ[0], SZ[1], SZ[2], SZ[3], 6.8, [[-5.8, CZ0, -1.4, CZ1]], floorC[2], 'plank', 'floor');
+    b.slab(SZ[0], SZ[1], SZ[2], SZ[3], 10.2, [[1.8, -13.2, 6.2, -11.4]], floorC[3], 'check', 'roof');
+    b.y = 6.8; b.box(4, -11.3, 4.4, 0.2, 4.5, 0xa58b6a, 'plank', 'rail'); b.y = 0;          // lan can bên dốc E
+    // ---- đồ đạc theo phòng; bỏ món nào chắn cửa / lối lên cầu thang
+    const furnT = {
+      bedroom: [[1.2, 1.5, 2.0, 2.4, 0.6, 0xf3c6d3, 'solid', 'bed'], [7.1, 2.4, 1.0, 2.4, 2.0, 0x8a5a33, 'wood', 'wardrobe'], [4.4, 0.7, 1.8, 0.8, 0.8, 0xc98b4f, 'wood', 'desk'], [1.0, 6.4, 0.9, 0.9, 0.9, 0xc98b4f, 'wood', 'crate']],
+      office: [[2, 3, 1.6, 0.8, 0.8, 0xe6b86a, 'wood', 'desk'], [6, 3, 1.6, 0.8, 0.8, 0xe6b86a, 'wood', 'desk'], [4, 0.45, 3.4, 0.5, 2.0, 0x555a66, 'solid', 'shelf'], [7.3, 6, 0.7, 1.6, 1.5, 0x6a7a8a, 'solid', 'cabinet']],
+      living: [[2.5, 2.6, 2.6, 1.0, 0.9, 0x9a6bd1, 'solid', 'sofa'], [2.5, 4.4, 1.4, 0.8, 0.5, 0x8a5a33, 'wood', 'table'], [2.5, 0.4, 2.0, 0.5, 0.7, 0x333344, 'solid', 'tv'], [7.5, 3, 0.5, 3, 2.0, 0x8a5a33, 'wood', 'shelf']],
+      kitchen: [[4, 0.4, 6, 0.7, 1.0, 0xf4f4f4, 'solid', 'counter'], [4, 3.8, 2.4, 1.0, 1.0, 0x7bd3ff, 'solid', 'counter'], [7.4, 2, 0.8, 0.8, 1.9, 0xd9d9d9, 'stripe', 'fridge'], [1, 6.8, 1.0, 1.0, 1.1, 0xc98b4f, 'wood', 'crate']],
+      storage: [[1.5, 1.5, 1.1, 1.1, 1.1, 0xc98b4f, 'wood', 'crate'], [1.5, 2.8, 1.1, 1.1, 2.2, 0xc98b4f, 'wood', 'crate'], [5.5, 1, 4, 0.6, 2.0, 0x6c7a89, 'stripe', 'shelf'], [5.5, 4, 4, 0.6, 2.0, 0x6c7a89, 'stripe', 'shelf'], [7.2, 7, 1.2, 1.2, 1.1, 0x6ab187, 'dots', 'crate']],
+      classroom: [[2, 2.6, 1.3, 0.8, 0.9, 0xe6b86a, 'wood', 'desk'], [4.6, 2.6, 1.3, 0.8, 0.9, 0xe6b86a, 'wood', 'desk'], [2, 5, 1.3, 0.8, 0.9, 0xe6b86a, 'wood', 'desk'], [4.6, 5, 1.3, 0.8, 0.9, 0xe6b86a, 'wood', 'desk'], [6.9, 0.5, 2, 0.5, 1.3, 0x2f5d3a, 'solid', 'blackboard']],
+    };
+    const rooms = [['NW', X0, Z0, 1], ['NM', -8, Z0, 1], ['NE', 0, Z0, 1], ['SW', X0, -3, -1], ['SM', -8, -3, -1], ['SE', 0, -3, -1]];
+    const plan = [
+      ['storage', 'kitchen', 'living', 'office', 'living', 'storage'],
+      ['bedroom', 'office', 'classroom', 'bedroom', 'living', 'kitchen'],
+      ['classroom', 'bedroom', 'office', 'office', 'bedroom', 'living'],
+    ];
+    const zonesFor = (k) => {
+      const Z = [];
+      for (const [a, c] of DOORS) { Z.push([X0 + a - 0.3, -7.6, X0 + c + 0.3, -5], [X0 + a - 0.3, -3, X0 + c + 0.3, -0.4]); }
+      for (const x of [-8, 0]) { Z.push([x - 2.2, -10.2, x + 2.2, -7.9], [x - 2.2, 0.9, x + 2.2, 3.1]); }
+      if (k === 0) Z.push([-13.3, 3.6, -10.9, 6], [-4.9, 3.6, -3.1, 6], [3, 3.6, 5.5, 6], [-5.7, -14, -3, -11.6]);
+      else Z.push([-6.8, 3.6, -4.3, 6]);
+      if (k === 1) Z.push([5.6, -0.4, 8, 2.4]);
+      if (k === 2) Z.push([0.2, -14, 6.8, -10.6]);
+      return Z;
+    };
+    const roomCol = [0xf7e7a8, 0xcfe8ff, 0xd3f0d0, 0xffd6e0, 0xe0d4f7, 0xffe0c2];
+    void roomCol;
+    for (let k = 0; k < 3; k++) {
+      b.y = k * Hh; const c = colEx[k];
+      const dS = k === 0 ? [[3, 4.7], [11.6, 13.3], [19.4, 21.1]] : [[9.6, 11.3]];          // cửa/ban công mặt nam
+      const dN = k === 0 ? [[10.8, 12.5]] : [];
+      const dW = k === 0 ? [[9.15, 10.85]] : [];
+      const dE = k === 0 ? [[9.15, 10.85]] : (k === 1 ? [[14, 16]] : []);
+      b.rect(X0, Z0, X1, Z1, T, WH, c, k === 0 ? 'brick' : 'solid', { N: dN, S: dS, W: dW, E: dE });
+      b.wall(X0, -5, X1, -5, T, WH, 0xe9edf2, 'solid', DOORS); b.wall(X0, -3, X1, -3, T, WH, 0xe9edf2, 'solid', DOORS);
+      for (const x of [-8, 0]) { b.wall(x, Z0, x, -5, T, WH, 0xffe9a8, 'solid', [[3.9, 5.9]]); b.wall(x, -3, x, Z1, T, WH, 0xffc9d6, 'solid', [[3.9, 5.9]]); }
+      const zs = zonesFor(k);
+      rooms.forEach(([name, rx, rz, f], i) => {
+        for (const [dx, dz, w, d, h, col, tex, kind] of furnT[plan[k][i]]) {
+          const x = rx + dx, z = f === 1 ? rz + dz : rz + 9 - dz;
+          if (zs.some((q) => x + w / 2 > q[0] && x - w / 2 < q[2] && z + d / 2 > q[1] && z - d / 2 < q[3])) continue;
+          b.box(x, z, w, d, h, col, tex, kind);
+        }
+      });
+    }
+    b.y = 0;
+    // ---- ban công (tầng 2 và 3) + lan can
+    const rail = (x, z, w, d, y) => { const save = b.y; b.y = y; b.box(x, z, w, d, 1.1, 0xb0b8c0, 'plank', 'rail'); b.y = save; };
+    b.surf(-7, Z1 + 0.15, -3, 8.0, 3.4, 3.4, null, 0xc9b79c, 'plank', 'floor'); b.surf(-7, Z1 + 0.15, -3, 8.0, 6.8, 6.8, null, 0xc9b79c, 'plank', 'floor');
+    for (const y of [3.4, 6.8]) { rail(-5, 8.1, 4.2, 0.2, y); rail(-2.9, 7.1, 0.2, 2.2, y); }
+    rail(-7.1, 7.1, 0.2, 2.2, 6.8);
+    // ---- lối thoát hiểm ngoài trời: dốc bám tường nam dẫn lên ban công tầng 2
+    b.surf(-12.5, 6.25, -7, 8.0, 0, 3.4, 'x+', 0x8a97a5, 'plank', 'stairs');
+    b.y = 0; b.box(-9.75, 8.1, 5.5, 0.2, 4.5, 0x8a97a5, 'plank', 'rail');
+    // ---- cầu nối từ tầng 2 sang mái nhà phụ
+    b.surf(8.15, 0, 14, 2, 3.4, 3.4, null, 0xb9bec4, 'check', 'floor'); rail(11.1, -0.1, 5.9, 0.2, 3.4); rail(11.1, 2.1, 5.9, 0.2, 3.4);
+    // ---- sân thượng: lan can, bể nước, máy lạnh
+    for (const [x, z, w, d] of [[-4, Z0, 24, 0.3], [-4, Z1, 24, 0.3], [X0, -4, 0.3, 20], [X1, -4, 0.3, 20]]) rail(x, z, w, d, 10.2);
+    b.y = 10.2; b.cir(-12, -10, 1.1, 2.4, 0x7a8896, 'tank'); b.cir(-9, -11.4, 0.8, 1.8, 0x7a8896, 'tank'); b.box(-3, -12, 2.2, 1.0, 1.1, 0xd9d9d9, 'stripe', 'ac'); b.box(-6, -8, 1.0, 2.2, 1.1, 0xd9d9d9, 'stripe', 'ac'); b.box(3, 0, 2.0, 1.0, 1.1, 0xd9d9d9, 'stripe', 'ac');
+    b.box(-4, 3, 3, 0.8, 1.2, 0xc98b4f, 'wood', 'crate'); b.box(5, 3.5, 1.2, 1.2, 1.2, 0xc98b4f, 'wood', 'crate'); b.y = 0;
+    // ---- nhà phụ 1 tầng (mái đi được)
+    const AX0 = 14, AX1 = 26, AZ0 = -9, AZ1 = 5;
+    b.rect(AX0, AZ0, AX1, AZ1, T, WH, 0xe8b86d, 'brick', { W: [[7.8, 9.8]], S: [[2.8, 4.8], [7.8, 9.8]], N: [[4.8, 6.8]] });
+    b.wall(22.5, AZ0, 22.5, AZ1, T, WH, 0xd0c4a8, 'solid', [[3.8, 5.8], [9.8, 11.8]]);
+    b.surf(16.6, 2.8, 21.8, 4.6, 0, 3.4, 'x+', 0xa58b6a, 'plank', 'stairs'); b.box(19.2, 2.7, 5.2, 0.2, 4.5, 0xa58b6a, 'plank', 'rail');
+    b.slab(AX0 - 0.15, AZ0 - 0.15, AX1 + 0.15, AZ1 + 0.15, 3.4, [[16.6, 2.8, 21.8, 4.6]], 0xb9bec4, 'check', 'roof');
+    for (const [x, z, w, d] of [[20, AZ0, 12, 0.3], [20, AZ1, 12, 0.3], [AX1, -2, 0.3, 14]]) rail(x, z, w, d, 3.4);
+    rail(AX0, -5.1, 0.3, 7.8, 3.4); rail(AX0, 3.5, 0.3, 3, 3.4);
+    for (const [x, z, w, d, h, c, t, k] of [[17, -6, 1.2, 1.2, 1.1, 0xc98b4f, 'wood', 'crate'], [18.4, -6, 1.2, 1.2, 2.2, 0xc98b4f, 'wood', 'crate'], [16, -2.5, 4, 0.7, 2.0, 0x6c7a89, 'stripe', 'shelf'], [19, 0, 4, 0.7, 2.0, 0x6c7a89, 'stripe', 'shelf'], [24, -6, 1.3, 1.3, 1.2, 0x6ab187, 'dots', 'crate'], [24.4, -2, 2.2, 1.0, 1.0, 0xe6b86a, 'wood', 'counter'], [24, 2.5, 1.4, 1.4, 1.1, 0xd62839, 'solid', 'crate']]) b.box(x, z, w, d, h, c, t, k);
+    b.y = 3.4; b.box(24, -6, 2, 1.0, 1.1, 0xd9d9d9, 'stripe', 'ac'); b.box(17, 0, 1.2, 1.2, 1.2, 0xc98b4f, 'wood', 'crate'); b.cir(24.5, 2.5, 0.8, 1.8, 0x7a8896, 'tank'); b.y = 0;
+    // ---- sân: xe, cây, bụi, ghế, container
+    const R = b.R;
+    for (const [x, z, c] of [[-26, 12, 0xd62839], [-20, 14, 0x2f6fdb], [2, 12, 0xffd23f], [12, 14, 0xf4f4f4]]) { b.box(x, z, 4.4, 1.9, 1.4, c, 'solid', 'car'); }
+    for (const [x, z, c2] of [[-25, -4, 0x3fa34d], [-22, -16, 0x5ea84a], [-12, 14.5, 0x2f8f6b], [10, 18, 0x7fc04a], [30, 10, 0xf2a65a], [-28, 4, 0x7fc04a], [18, 16, 0x5ea84a]]) b.cir(x, z, 0.8, 3.0, 0x7a4a2a, 'tree', c2);
+    for (const [x, z, w, d] of [[-19, 2, 4, 0.9], [-19, -8, 0.9, 4], [12, -14, 4, 0.9], [11, 9, 4, 0.9], [27, 12, 0.9, 4], [-4, 14, 3, 0.9], [-8, 18, 5, 0.9], [14, -20, 5, 0.9]]) b.box(x, z, w, d, 1.3, 0x2f8f4a, 'dots', 'hedge');
+    for (const [x, z] of [[-3, 11], [6, 10], [-22, -8], [15, 12]]) b.box(x, z, 2.2, 0.7, 0.5, 0x8a5a33, 'wood', 'bench');
+    b.box(-6, -19, 6, 2.4, 2.6, 0x3a86ff, 'stripe', 'container'); b.box(0, -19, 6, 2.4, 2.6, 0xf77f00, 'stripe', 'container'); b.box(28, -14, 2.4, 6, 2.6, 0x3fa34d, 'stripe', 'container');
+    for (let i = 0; i < 8; i++) b.cir(-30 + i * 3.2 + R(), (i % 2 ? 1 : -1) * 22.4, 0.5, 1.2, 0x3fa34d, 'bush');
+    for (const [x, z] of [[-2, 17], [4, 20], [20, 20], [-14, 20]]) b.box(x, z, 1.3, 1.3, 1.2, 0xc98b4f, 'wood', 'crate');
+    b.buildings.push({ x0: X0 - 0.3, z0: Z0 - 0.3, x1: X1 + 0.3, z1: Z1 + 0.3 }, { x0: AX0 - 0.3, z0: AZ0 - 0.3, x1: AX1 + 0.3, z1: AZ1 + 0.3 });
+    return out(b, {
+      id: 'tower', name: 'Chung Cư Ú Òa', desc: 'Tòa nhà 3 tầng + sân thượng: cầu thang, ban công, cầu nối, lối thoát hiểm, gầm cầu thang',
+      HW, HD, sky: 0xc6e6ff, floor: 0x93b27c, floor2: 0x86a56f, ground: 'grass', multi: true,
+      spawns: {
+        hider: [[-24, 0], [-22, 11], [-2, 15], [10, 16], [28, 6], [-26, -12], [10, -17], [-9, -17], [22, 12], [-26, 18]],
+        seeker: [[-30.5, 22], [-29, 22], [-27.5, 22], [-30.5, 20.5], [-29, 20.5], [-27.5, 20.5], [-26, 22], [-26, 20.5], [-30.5, 19]],
+      },
+    });
+  }
+
+  const MAPS = [street(), market(), park(), warehouse(), tower()];
   const mapOf = (id) => MAPS.find((m) => m.id === id) || MAPS[0];
   return { MAPS, mapOf };
 });

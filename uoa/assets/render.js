@@ -65,56 +65,87 @@
     const outer = new T.Mesh(new T.PlaneGeometry(600, 600), new T.MeshStandardMaterial({ color: lin(map.indoor ? 0x4b4636 : 0x6f8a56), roughness: 1 }));
     outer.rotation.x = -Math.PI / 2; outer.position.y = -0.02; scene.add(outer);
 
-    // vật cản
-    const group = new T.Group(); scene.add(group); const canopies = [];
-    const add = (m, x, y, z) => { m.position.set(x, y, z); m.castShadow = sh; m.receiveShadow = true; group.add(m); return m; };
+    // vật cản + sàn/cầu thang (mỗi thứ ghi lại độ cao đáy để "mở mái" khi người chơi vào nhà)
+    UO.prepMap(map);
+    const group = new T.Group(); scene.add(group); const canopies = [], parts = [];
+    const add = (m, x, y, z, bottom, cx, cz) => { m.position.set(x, y, z); m.castShadow = sh; m.receiveShadow = true; group.add(m); parts.push({ mesh: m, bottom: bottom == null ? y : bottom, x: cx == null ? x : cx, z: cz == null ? z : cz }); return m; };
     for (const o of map.boxes) {
-      const m = add(new T.Mesh(boxGeo(o.w, o.h, o.d), mat(o.c, o.tex)), o.x, o.h / 2, o.z);
-      if (o.k === 'car') { const cab = new T.Mesh(boxGeo(o.w * (o.w > o.d ? 0.5 : 0.9), 0.55, o.d * (o.w > o.d ? 0.9 : 0.5)), mat(0xdcecff)); add(cab, o.x, o.h + 0.27, o.z); }
-      if (o.k === 'counter' || o.k === 'bench' || o.k === 'desk') { const top = new T.Mesh(boxGeo(o.w + 0.06, 0.06, o.d + 0.06), mat(0xe9e0cc)); add(top, o.x, o.h + 0.03, o.z); }
-      void m;
+      const by = o.y || 0;
+      add(new T.Mesh(boxGeo(o.w, o.h, o.d), mat(o.c, o.tex)), o.x, by + o.h / 2, o.z, by);
+      if (o.k === 'car') add(new T.Mesh(boxGeo(o.w * (o.w > o.d ? 0.5 : 0.9), 0.55, o.d * (o.w > o.d ? 0.9 : 0.5)), mat(0xdcecff)), o.x, by + o.h + 0.27, o.z, by);
+      if (o.k === 'counter' || o.k === 'bench' || o.k === 'desk') add(new T.Mesh(boxGeo(o.w + 0.06, 0.06, o.d + 0.06), mat(0xe9e0cc)), o.x, by + o.h + 0.03, o.z, by);
     }
     for (const o of map.circles) {
+      const by = o.y || 0;
       if (o.k === 'tree') {
-        add(new T.Mesh(new T.CylinderGeometry(o.r * 0.8, o.r, o.h, 10), mat(o.c)), o.x, o.h / 2, o.z);
-        const R = o.r * 2.6; const c1 = add(new T.Mesh(new T.SphereGeometry(R, 14, 10), mat(o.c2 || 0x3fa34d)), o.x, o.h + R * 0.45, o.z);
-        const c2 = add(new T.Mesh(new T.SphereGeometry(R * 0.7, 12, 8), mat(o.c2 || 0x3fa34d)), o.x + R * 0.35, o.h + R * 0.15, o.z - R * 0.2);
+        add(new T.Mesh(new T.CylinderGeometry(o.r * 0.8, o.r, o.h, 10), mat(o.c)), o.x, by + o.h / 2, o.z, by);
+        const R = o.r * 2.6; const c1 = add(new T.Mesh(new T.SphereGeometry(R, 14, 10), mat(o.c2 || 0x3fa34d)), o.x, by + o.h + R * 0.45, o.z, by);
+        const c2 = add(new T.Mesh(new T.SphereGeometry(R * 0.7, 12, 8), mat(o.c2 || 0x3fa34d)), o.x + R * 0.35, by + o.h + R * 0.15, o.z - R * 0.2, by);
         canopies.push([c1, R], [c2, R * 0.7]);
-      } else if (o.k === 'bush') add(new T.Mesh(new T.SphereGeometry(o.r * 1.15, 12, 8), mat(o.c)), o.x, o.r * 0.45, o.z).scale.set(1, o.h / (o.r * 1.15) * 0.6, 1);
-      else if (o.k === 'pond' || o.k === 'pondrim') { const m = add(new T.Mesh(new T.CylinderGeometry(o.r, o.r, o.h, 28), mat(o.c)), o.x, o.k === 'pond' ? o.h / 2 + 0.01 : o.h / 2, o.z); m.castShadow = false; }
-      else { add(new T.Mesh(new T.CylinderGeometry(o.r, o.r, o.h, 16), mat(o.c)), o.x, o.h / 2, o.z); if (o.k === 'barrel') add(new T.Mesh(new T.CylinderGeometry(o.r * 1.02, o.r * 1.02, 0.08, 16), mat(0x333333)), o.x, o.h * 0.7, o.z); }
+      } else if (o.k === 'bush') add(new T.Mesh(new T.SphereGeometry(o.r * 1.15, 12, 8), mat(o.c)), o.x, by + o.r * 0.45, o.z, by).scale.set(1, o.h / (o.r * 1.15) * 0.6, 1);
+      else if (o.k === 'pond' || o.k === 'pondrim') { const m = add(new T.Mesh(new T.CylinderGeometry(o.r, o.r, o.h, 28), mat(o.c)), o.x, o.k === 'pond' ? o.h / 2 + 0.01 : o.h / 2, o.z, by); m.castShadow = false; }
+      else { add(new T.Mesh(new T.CylinderGeometry(o.r, o.r, o.h, 16), mat(o.c)), o.x, by + o.h / 2, o.z, by); if (o.k === 'barrel') add(new T.Mesh(new T.CylinderGeometry(o.r * 1.02, o.r * 1.02, 0.08, 16), mat(0x333333)), o.x, by + o.h * 0.7, o.z, by); }
     }
+    const TH = 0.3;
+    for (const sf of map.surfaces) {
+      const w = sf.x1 - sf.x0, d = sf.z1 - sf.z0, cx = (sf.x0 + sf.x1) / 2, cz = (sf.z0 + sf.z1) / 2;
+      if (!sf.dir) { add(new T.Mesh(boxGeo(w, TH, d), mat(sf.c, sf.tex)), cx, sf.y0 - TH / 2, cz, sf.y0 - TH); continue; }
+      const alongX = sf.dir[0] === 'x', run = alongX ? w : d, rise = sf.y1 - sf.y0, len = Math.hypot(run, rise), th = Math.atan2(rise, run), sgn = sf.dir[1] === '+' ? 1 : -1;
+      const slab = new T.Mesh(boxGeo(alongX ? len : w, TH, alongX ? d : len), mat(sf.c, sf.tex));
+      if (alongX) slab.rotation.z = th * sgn; else slab.rotation.x = -th * sgn;
+      add(slab, cx, (sf.y0 + sf.y1) / 2 - Math.cos(th) * TH / 2, cz, Math.min(sf.y0, sf.y1) - TH);
+      const N = Math.max(3, Math.round(Math.abs(rise) / 0.22));                   // bậc thang vẽ lên mặt dốc
+      for (let i = 0; i < N; i++) {
+        const t = (i + 0.5) / N, fx = alongX ? (sgn > 0 ? sf.x0 + run * t : sf.x1 - run * t) : cx, fz = alongX ? cz : (sgn > 0 ? sf.z0 + run * t : sf.z1 - run * t);
+        const y = sf.y0 + rise * t, tread = new T.Mesh(boxGeo(alongX ? run / N * 0.5 : w - 0.04, 0.06, alongX ? d - 0.04 : run / N * 0.5), mat(0x7e6a4f));
+        add(tread, fx, y + 0.02, fz, Math.min(sf.y0, sf.y1) - TH, cx, cz);
+      }
+    }
+    // mở mái: khi người chơi ở trong một tòa nhà, ẩn sàn/tường/đồ phía trên đầu (trong chính tòa nhà đó)
+    let cutKey = '';
+    const cut = (px, py, pz) => {
+      const bd = map.buildings.find((q) => px >= q.x0 && px <= q.x1 && pz >= q.z0 && pz <= q.z1), thr = py + 2.4, key = bd ? map.buildings.indexOf(bd) + ':' + thr.toFixed(1) : 'none';
+      if (key !== cutKey) {
+        cutKey = key;
+        for (const q of parts) q.mesh.visible = !(bd && q.bottom >= thr && q.x >= bd.x0 && q.x <= bd.x1 && q.z >= bd.z0 && q.z <= bd.z1);
+      }
+      return bd ? { above: thr, rect: bd } : null;
+    };
     const fxs = [];
-    return { scene, camera, sun, group, fxs, canopies, dispose() { if (env) env.dispose(); if (pm) pm.dispose(); scene.traverse((o) => { if (o.isMesh && o.material && !matCache.has(o.material.color && 0) && o.geometry && o.geometry.type !== 'BoxGeometry') o.geometry.dispose(); }); }, map };
+    return { scene, camera, sun, group, fxs, canopies, cut, dispose() { if (env) env.dispose(); if (pm) pm.dispose(); scene.traverse((o) => { if (o.isMesh && o.material && !matCache.has(o.material.color && 0) && o.geometry && o.geometry.type !== 'BoxGeometry') o.geometry.dispose(); }); }, map };
   }
 
   /* ---------- nhân vật ---------- */
   const CHAR = (id) => PP.CHARACTERS.find((c) => c.id === id) || PP.CHARACTERS[0];
+  const smooth = (t) => t * t * (3 - 2 * t);
   class Avatar {
     constructor(world, p, isMe) {
       this.p = p; this.isMe = isMe; const def = CHAR(p.char);
       this.ch = PP.Character.build(def, { team: 'B', look: null });
-      this.holder = new T.Group(); this.holder.add(this.ch.root); world.scene.add(this.holder);
+      this.holder = new T.Group(); this.pitch = new T.Group(); this.pitch.add(this.ch.root); this.holder.add(this.pitch); world.scene.add(this.holder);
       this.ch.root.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
       if (p.role === 'seeker' && PP.Guns) { this.gun = PP.Guns.attach(this.ch, 'sniper', 0x8a5a33); } else this.ch.root.traverse((o) => { if (o.userData && o.userData.paddle) o.visible = false; });
       if (isMe) this.ch.setHighlight(p.role === 'seeker' ? 0xff9f1c : 0x5ad1ff);
-      this.scaleY = 1; this.paintKey = ''; this.crouchT = 0; this.dustT = 0; this.catchT = -1;
+      this.scaleY = 1; this.paintKey = ''; this.proneT = 0; this.catchT = -1; this.useStudio = false; this.fy = 0;
       this.holder.scale.setScalar(C.CHAR_SCALE);
     }
     sync(dt, sim, hideSelf) {
       const p = this.p, c = Math.cos(p.yaw), s = Math.sin(p.yaw);
-      this.holder.position.set(p.x, 0, p.z); this.holder.rotation.y = p.yaw;
-      const lvx = c * p.vx - s * p.vz, lvz = s * p.vx + c * p.vz;
+      this.fy += (p.y - this.fy) * Math.min(1, dt * 18);                     // làm mượt khi lên/xuống dốc
+      this.holder.position.set(p.x, this.fy, p.z); this.holder.rotation.y = p.yaw;
+      const lvx = c * p.vx - s * p.vz, lvz = s * p.vx + c * p.vz, spd = Math.hypot(p.vx, p.vz);
+      this.proneT = clamp(this.proneT + (p.prone ? 1 : -1) * dt / C.PRONE.transition, 0, 1); const e = smooth(this.proneT);
       let mode = 'ready'; if (p.caught) mode = 'sad'; else if (sim.phase === 'over') mode = (sim.result && ((sim.result.winner === 'seekers') === (p.role === 'seeker'))) ? 'celebrate' : 'sad';
-      else if (Math.hypot(p.vx, p.vz) < 0.2) mode = 'idle';
-      this.ch.update(dt, { x: 0, z: 0, vx: lvx, vz: lvz, mode });
+      else if (spd < 0.2) mode = 'idle';
+      // nằm sấp thật: xoay cả thân 90° về phía trước, úp mặt xuống, ngẩng đầu; bò thì dùng chu kỳ tay-chân
+      this.pitch.rotation.x = e * Math.PI / 2; this.pitch.position.set(0, e * 0.21, -e * 0.62);
+      const upd = { x: 0, z: 0, vx: lvx, vz: lvz, mode };
+      if (e > 0.02 && !p.caught) { upd.mode = spd > 0.2 ? 'ready' : 'idle'; upd.headP = -1.15 * e; }
+      this.ch.update(dt, upd);
       if (this.gun) this.gun.sync(p.fireCd > C.SLING.cd - 0.18 ? 1 : 0);
-      // cúi thấp
       const tgt = p.crouch ? 0.68 : 1; this.scaleY += (tgt - this.scaleY) * Math.min(1, dt * 12);
       this.holder.scale.set(C.CHAR_SCALE, C.CHAR_SCALE * this.scaleY, C.CHAR_SCALE);
-      if (p.caught) { this.catchT = this.catchT < 0 ? 0 : this.catchT + dt; this.holder.rotation.z = Math.min(1.3, this.catchT * 5) * 0.0; }
-      // tô màu
-      const key = p.paint ? JSON.stringify(p.paint) : ''; if (key !== this.paintKey) { this.paintKey = key; this.ch.setPaint(p.paint || null); }
+      if (!this.useStudio) { const key = p.paint ? JSON.stringify(p.paint) : ''; if (key !== this.paintKey) { this.paintKey = key; this.ch.setPaint(p.paint || null); } }
       this.holder.visible = !hideSelf;
     }
     dispose() { if (this.gun) this.gun.dispose(); this.ch.dispose(); if (this.holder.parent) this.holder.parent.remove(this.holder); }
@@ -131,10 +162,10 @@
         this.world.scene.add(m);
       }
     }
-    dust(x, z, big) { this.burst(x, 0.08, z, 0xd9cdb4, big ? 4 : 2, big ? 1.4 : 0.8, 0.5, big ? 0.16 : 0.1, -0.5); }
-    ring(x, z, color) {
+    dust(x, z, big, y) { this.burst(x, (y || 0) + 0.08, z, 0xd9cdb4, big ? 4 : 2, big ? 1.4 : 0.8, 0.5, big ? 0.16 : 0.1, -0.5); }
+    ring(x, z, color, y) {
       const m = new T.Mesh(new T.RingGeometry(0.3, 0.42, 32), new T.MeshBasicMaterial({ color: lin(color), transparent: true, opacity: 0.85, side: T.DoubleSide, depthWrite: false }));
-      m.rotation.x = -Math.PI / 2; m.position.set(x, 0.06, z); this.list.push({ m, ring: true, t: 0, life: 0.9, size: 1 }); this.world.scene.add(m);
+      m.rotation.x = -Math.PI / 2; m.position.set(x, (y || 0) + 0.06, z); this.list.push({ m, ring: true, t: 0, life: 0.9, size: 1 }); this.world.scene.add(m);
     }
     launch(e) {
       const m = new T.Mesh(this.stoneGeo, this.stoneMat); m.position.set(e.x, e.y, e.z); m.castShadow = true; this.world.scene.add(m);
@@ -147,7 +178,7 @@
         const f = this.list[i]; f.t += dt; const k = f.t / f.life;
         if (k >= 1) { this.world.scene.remove(f.m); f.m.material.dispose(); if (f.ring) f.m.geometry.dispose(); this.list.splice(i, 1); continue; }
         if (f.ring) { const s = 1 + k * 5; f.m.scale.set(s, s, s); f.m.material.opacity = 0.85 * (1 - k); continue; }
-        f.vy -= f.g * dt; f.m.position.x += f.vx * dt; f.m.position.y = Math.max(0.03, f.m.position.y + f.vy * dt); f.m.position.z += f.vz * dt;
+        f.vy -= f.g * dt; f.m.position.x += f.vx * dt; f.m.position.y = f.m.position.y + f.vy * dt; f.m.position.z += f.vz * dt;
         const s = f.size * (f.g < 0 ? 0.6 + k * 1.6 : 1 - k * 0.5); f.m.scale.set(s, s, s); f.m.material.opacity = 0.9 * (1 - k);
       }
     }
@@ -156,25 +187,33 @@
 
   /* ---------- camera quanh nhân vật ---------- */
   class OrbitCam {
-    constructor() { this.yaw = 0; this.pitch = 0.42; this.dist = 5.8; this.want = 5.8; this.cur = 5.8; this.pos = new T.Vector3(); this.look = new T.Vector3(); this.fwd = new T.Vector3(); this.shake = 0; }
+    constructor() { this.yaw = 0; this.pitch = 0.42; this.want = 5.8; this.cur = 5.8; this.pos = new T.Vector3(); this.look = new T.Vector3(); this.fwd = new T.Vector3(); this.shake = 0; this.ty = 1.6; this.sdist = 2.7; }
     rotate(dx, dy, sens) { this.yaw -= dx * sens; this.pitch = clamp(this.pitch + dy * sens, -0.35, 1.25); }
-    zoom(d) { this.want = clamp(this.want + d, 2.6, 10); }
-    update(dt, camera, map, tx, ty, tz, aiming) {
+    zoom(d, studio) { if (studio) this.sdist = clamp(this.sdist + d * 0.4, 1.3, 5); else this.want = clamp(this.want + d, 2.6, 10); }
+    /** tx,ty,tz: điểm nhìn; fy: độ cao sàn dưới chân; skip: { above, rect } để bỏ qua mái khi vào nhà */
+    update(dt, camera, map, tx, ty, tz, aiming, fy, skip) {
+      this.ty += (ty - this.ty) * Math.min(1, dt * 8); ty = this.ty;                         // đổi tư thế: độ cao camera đổi từ từ, không giật
       const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch), sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
-      // vector từ mục tiêu ra phía sau camera
-      const bx = -sy * cp, by = sp, bz = -cy * cp;
-      const sideX = -cy, sideZ = sy, off = aiming ? 0.65 : 0;                       // vai phải khi ngắm
+      const bx = -sy * cp, by = sp, bz = -cy * cp, sideX = -cy, sideZ = sy, off = aiming ? 0.65 : 0;
       const ox = tx + sideX * off, oz = tz + sideZ * off;
-      const free = UO.rayWorld(map, ox, ty, oz, bx, by, bz, this.want + 0.4, 0.2);
-      const target = Math.max(1.0, Math.min(this.want, free - 0.4));
+      const free = UO.rayWorld(map, ox, ty, oz, bx, by, bz, this.want + 0.4, 0.2, skip);
+      const target = Math.max(0.5, Math.min(this.want, free - 0.4));
       this.cur += (target - this.cur) * Math.min(1, dt * (target < this.cur ? 22 : 7));
-      this.pos.set(ox + bx * this.cur, Math.max(0.35, ty + by * this.cur), oz + bz * this.cur);
+      this.pos.set(ox + bx * this.cur, Math.max((fy || 0) + 0.3, ty + by * this.cur), oz + bz * this.cur);
+      this._finish(camera, cp, sp, sy, cy);
+    }
+    /** xưởng tô màu: quay quanh nhân vật ở cự ly gần, không xét va chạm */
+    studioUpdate(dt, camera, tx, ty, tz) {
+      this.ty += (ty - this.ty) * Math.min(1, dt * 8);
+      const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch), sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
+      this.pos.set(tx - sy * cp * this.sdist, Math.max(0.2, this.ty + sp * this.sdist), tz - cy * cp * this.sdist);
+      this._finish(camera, cp, sp, sy, cy);
+    }
+    _finish(camera, cp, sp, sy, cy) {
       camera.position.copy(this.pos);
       if (this.shake > 0.001) { camera.position.x += (Math.random() - 0.5) * this.shake; camera.position.y += (Math.random() - 0.5) * this.shake; this.shake *= 0.86; }
-      this.look.set(tx + sideX * off * 0.6 + sy * cp * 3, ty - sp * 3, tz + sideZ * off * 0.6 + cy * cp * 3);
       this.look.set(this.pos.x + sy * cp, this.pos.y - sp, this.pos.z + cy * cp);
-      camera.lookAt(this.look); camera.updateMatrixWorld();
-      this.fwd.set(sy * cp, -sp, cy * cp);
+      camera.lookAt(this.look); camera.updateMatrixWorld(); this.fwd.set(sy * cp, -sp, cy * cp);
     }
   }
 

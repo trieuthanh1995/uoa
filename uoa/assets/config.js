@@ -13,6 +13,7 @@
     CHAR_SCALE: 1.3,         // phóng to nhân vật khi hiển thị (giống game gốc)
     H_STAND: 1.85,           // chiều cao thân người đứng (để tính trúng đạn)
     H_CROUCH: 1.1,           // chiều cao khi cúi
+    H_PRONE: 0.45,           // chiều cao khi nằm sấp
     MAX_PLAYERS: 10,
     MIN_PLAYERS: 2,
     // --- thời gian (giây)
@@ -23,10 +24,11 @@
     // --- di chuyển (m/s)
     HIDER: { walk: 4.0, sprint: 6.2, sprintTime: 5, sprintCd: 15, crouch: 0.45 },
     SEEKER: { walk: 4.7, crouch: 0.5 },
+    PRONE: { speed: 0.4, transition: 0.45 },       // bò = 40% tốc độ đi bộ; đổi tư thế nằm mất 0.45 s
     // --- ná cao su: 1 phát trúng là bắt; hồi 2 giây; đạn có đường cong 3D
     SLING: { cd: 2, speed: 26, gravity: 6.5, r: 0.13, range: 48, life: 3.2, muzzleY: 1.35 },
     // --- âm thanh định vị
-    PING: { every: 5, stagger: true, crouchGain: 0.6, range: 45, wallLoss: 0.45, wallLP: 900 },
+    PING: { every: 5, stagger: true, crouchGain: 0.6, proneGain: 0.5, range: 45, wallLoss: 0.45, wallLP: 900 },
     FOOT: { walkRange: 7, sprintRange: 18 },   // tiếng bước chân nghe được trong bán kính (m); cúi = im lặng
     // --- điểm thưởng
     POINTS: { seekCatch: 10, seekWin: 20, seekPlay: 5, hideSurvive: 15, hideWin: 20, hidePlay: 5 },

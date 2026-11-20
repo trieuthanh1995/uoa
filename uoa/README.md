@@ -1,11 +1,16 @@
-# Ú òa – Trốn tìm 3D
+# Ú òa – Trốn tìm 3D (v0.2)
 
 Game riêng, tách khỏi game súng nước. Dùng lại 100% nhân vật gốc (18 nhân vật, `character.js` chỉ thêm hàm tô màu `setPaint`, không đổi hình dáng).
+
+## Có gì mới ở v0.2
+1. **Cọ vẽ tự do (Xưởng tô màu):** vẽ trực tiếp lên mô hình 3D nhân vật. Chọn vùng (đầu, thân trước, thân sau, tay trái/phải, chân trái/phải); cọ cứng / mềm / chấm / tẩy; cỡ cọ, độ mờ, màu tùy chỉnh (hex); hoàn tác – làm lại (Ctrl+Z / Ctrl+Y), xóa nét vùng, về màu gốc, đổ màu vùng / cả người. Nét vẽ bám đúng bề mặt (tính UV + tỉ lệ bề mặt tại điểm chạm), có viền sáng báo vùng đang chỉnh, chỉ tạo texture cho mesh bị đụng tới. Màu trung bình các vùng được tính lại để bot đánh giá độ ngụy trang. Lịch sử nét vẽ lưu dạng dữ liệu gọn (`exportArt`) – sẵn để đồng bộ mạng.
+2. **Nằm sấp / bò (phím Z, nút 🛌):** hoạt ảnh nằm úp mặt, ngẩng đầu, bò bằng chu kỳ tay chân. Chỉ đi 40% tốc độ, không chạy nước rút, **không bắn ná khi nằm**, tiếng bước chân rất nhỏ, ping nhỏ hơn, tầm nhìn của bot giảm mạnh, đạn bị vật thấp (từ 0.45 m) chắn. Chui được gầm cầu thang. Đổi tư thế mất 0.45 s; đứng dậy bằng Z / Shift / C.
+3. **Bản đồ nhiều tầng “Chung Cư Ú Òa” (64×48 m):** nhà 3 tầng + sân thượng, 6 phòng mỗi tầng có đồ đạc, hành lang, 3 cầu thang trong nhà + 1 lên sân thượng, ban công, lối thoát hiểm ngoài trời, cầu nối sang nhà phụ có mái đi được, gầm cầu thang. Lõi mô phỏng hiểu độ cao: sàn/trần/dốc, trần thấp chặn tư thế, tầm nhìn–tiếng–đạn 3D (sàn chắn), rơi xuống khi bước hụt. Bot đi cầu thang (A* nhiều tầng), nghe/nhìn 3D. Khi bạn vào nhà, các tầng phía trên tự ẩn để nhìn rõ; hành lang hẹp thì camera chuyển sang góc nhìn thứ nhất.
 
 ## Chạy
 ```
 node server.js        # rồi mở http://localhost:3000   (Node 18+, không cần cài thư viện)
-node test-sim.js      # chạy bot-vs-bot trên cả 4 bản đồ, kiểm tra lõi luật chơi
+node test-sim.js      # bot-vs-bot trên cả 5 bản đồ + kiểm thử leo cầu thang, gầm cầu thang, đạn xuyên sàn, tư thế
 node bal.js 12        # thống kê cân bằng (tỉ lệ thắng, số phát bắn…) theo cấp bot
 ```
 
@@ -29,8 +34,9 @@ node bal.js 12        # thống kê cân bằng (tỉ lệ thắng, số phát b
 
 ## Chưa làm (nói thẳng)
 - **Chơi mạng với bạn bè**: lõi mô phỏng đã tách để server dùng, nhưng chưa có phòng online/đồng bộ. Hiện chỉ chơi 1 người + bot.
-- **Bản đồ gấp 10 lần**: mới 4 bản đồ, một tầng (chưa có nhà nhiều tầng/cầu thang, chưa có mái nhà). Mỗi bản đồ ~ 44×32 đến 60×48 m.
-- Hoạt ảnh riêng cho ngồi/kéo dây ná/bị bắn: đang dùng hoạt ảnh sẵn của nhân vật (đứng, chạy, buồn, ăn mừng); cúi thấp làm bằng cách ép thấp thân; bị bắn dùng hoạt ảnh “buồn”.
+- **Bản đồ gấp 10 lần**: mới 5 bản đồ (1 bản nhiều tầng). Thêm bản đồ = thêm một hàm trong `maps.js` (hộp/trụ có độ cao nền `y`, sàn/cầu thang `surf`, sàn có lỗ `slab`).
+- Phụ kiện (mũ, kính…) chưa tô được; cọ vẽ chỉ áp lên các vùng da/lông/áo/quần/giày.
+- Hoạt ảnh riêng cho kéo dây ná/bị bắn: đang dùng hoạt ảnh sẵn của nhân vật; “cúi” là ép thấp thân (chưa có tư thế ngồi riêng); nằm sấp là xoay thân + chu kỳ tay chân có sẵn.
 - Tùy chỉnh nhân vật/mở khóa phần thưởng: điểm được cộng và lưu, nhưng chưa có gì để mở khóa.
 - Chống gian lận “nhìn xuyên tường” chỉ thật sự có hiệu lực khi có server (server không gửi vị trí phe kia).
 
