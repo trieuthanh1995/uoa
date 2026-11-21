@@ -6,7 +6,7 @@
   <title>Ú òa – Trốn tìm 3D</title>
   <meta name="description" content="Ú òa – game trốn tìm 3D: ngụy trang bằng màu sắc, nghe tiếng kêu định vị và săn người bằng ná cao su.">
   <meta name="theme-color" content="#1b2a4a">
-  <link rel="stylesheet" href="./assets/style.css?v=2">
+  <link rel="stylesheet" href="./assets/style.css?v=3">
 </head>
 <body>
 <canvas id="view"></canvas>
@@ -33,6 +33,8 @@
       <div class="row col"><span>Bản đồ</span><select id="mapSel"></select><small id="mapDesc"></small></div>
       <div class="row col"><span>Độ khó bot</span>
         <div class="seg" id="segLevel"><button data-v="easy">Dễ</button><button data-v="normal" class="on">Trung bình</button><button data-v="hard">Khó</button></div></div>
+      <div class="row col"><span>Nhân vật dạng giấy bẹt <small>mỏng như tờ giấy cán mỏng: nhìn ngang gần như không thấy, đạn dễ trượt</small></span>
+        <div class="seg" id="segFlat"><button data-v="hiders" class="on">Người trốn</button><button data-v="all">Tất cả</button><button data-v="off">Tắt</button></div></div>
       <div class="row col"><span>Đồ họa</span>
         <div class="seg" id="segQ"><button data-v="0">Thấp</button><button data-v="1" class="on">Vừa</button><button data-v="2">Cao</button></div></div>
       <button id="btnStart" class="big">▶ Bắt đầu trận</button>
@@ -81,12 +83,14 @@
   <div id="brushRing"></div>
   <button id="bPaint" class="tbtn paintbtn">🎨 Tô màu (E)</button>
 
+  <div id="zoomCtl"><button id="zIn" aria-label="Phóng to">＋</button><button id="zOut" aria-label="Thu nhỏ">－</button><button id="zReset" aria-label="Đặt lại thu phóng">⟲</button></div>
   <div id="joy"><div id="joyKnob"></div></div>
   <div id="tbtns">
     <button id="bFire" class="tbtn fire">🎯</button>
     <button id="bSprint" class="tbtn">💨</button>
     <button id="bCrouch" class="tbtn">🧎</button>
     <button id="bProne" class="tbtn">🛌</button>
+    <button id="bTurnL" class="tbtn turn">↺</button><button id="bTurnR" class="tbtn turn">↻</button>
   </div>
   <div id="lockHint">Nhấp vào màn hình để khóa chuột · Q: khóa/mở khóa</div>
 </div>
@@ -115,11 +119,12 @@
     <li><b>Truy tìm 180 giây:</b> người đi tìm bắn ná cao su (hồi 2 giây, trúng là bắt). Cứ 5 giây mỗi người trốn phát một tiếng kêu — hãy nghe hướng và độ to để đoán chỗ.</li>
     <li>Người trốn thắng nếu còn ít nhất một người sống khi hết giờ. Người tìm thắng nếu bắt hết.</li>
     <li>Cúi thấp (giữ C) thì im lặng và khó thấy hơn nhưng đi chậm. <b>Nằm sấp (Z)</b> bò được sát đất, rất khó thấy và chui được gầm cầu thang, nhưng chỉ đi bằng 40% tốc độ và không bắn ná được. Chạy nước rút (5 giây, hồi 15 giây) nhanh hơn nhưng bước chân ồn.</li>
+    <li><b>Dạng giấy bẹt:</b> người trốn mỏng như tờ giấy cán mỏng. Nhìn thẳng mặt thì thấy bình thường, nhưng nhìn ngang chỉ còn một đường mỏng và đạn dễ trượt — hãy xoay người ([ và ]) để quay cạnh mỏng về phía người đi tìm. Có thể tắt hoặc áp dụng cho tất cả trong phần thiết lập trận.</li>
     <li>Bản đồ <b>Chung Cư Ú Òa</b> có 3 tầng + sân thượng: lên xuống bằng cầu thang, tiếng và đạn bị sàn chắn. Khi vào nhà, các tầng phía trên tự ẩn đi để bạn nhìn rõ.</li>
   </ol>
   <div class="keys">
-    <div><b>PC</b> · WASD đi · Chuột phải (giữ) hoặc khóa chuột để xoay · Shift chạy · C cúi · Z nằm/đứng dậy · Chuột trái / Space bắn · E mở xưởng tô màu (Ctrl+Z hoàn tác) · Lăn chuột zoom · Esc tạm dừng</div>
-    <div><b>Điện thoại</b> · Cần trái đi · vuốt màn hình để xoay · 💨 chạy · 🧎 cúi · 🛌 nằm · 🎯 bắn · 🎨 xưởng tô màu</div>
+    <div><b>PC</b> · WASD đi · Chuột phải (giữ) hoặc khóa chuột để xoay · Shift chạy · C cúi · Z nằm/đứng dậy · Chuột trái / Space bắn · E mở xưởng tô màu (Ctrl+Z hoàn tác) · Lăn chuột hoặc +/− thu phóng (0: đặt lại) · [ ] xoay người khi là giấy bẹt · Esc tạm dừng</div>
+    <div><b>Điện thoại</b> · Cần trái đi · vuốt màn hình để xoay · 💨 chạy · 🧎 cúi · 🛌 nằm · 🎯 bắn · ↺↻ xoay người · hai ngón chụm/giãn để thu phóng · 🎨 xưởng tô màu</div>
   </div>
   <button id="btnHelpX" class="big">Đã hiểu</button>
 </div></div>

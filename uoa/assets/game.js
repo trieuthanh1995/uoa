@@ -5,7 +5,7 @@
   const $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
   const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* bỏ qua */ } } };
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-  let S = { char: 'bear', total: 6, seekers: 2, role: 'random', map: 'random', level: 'normal', q: 1, vol: 80, sens: 100 };
+  let S = { char: 'bear', total: 6, seekers: 2, role: 'random', map: 'random', level: 'normal', q: 1, vol: 80, sens: 100, flat: 'hiders' };
   try { Object.assign(S, JSON.parse(store.get('uoa.settings') || '{}')); } catch (e) { /* bỏ qua */ }
   let points = +store.get('uoa.points') || 0;
   const save = () => store.set('uoa.settings', JSON.stringify(S));
@@ -29,7 +29,7 @@
     sel.value = S.map; sel.onchange = () => { S.map = sel.value; save(); mapDesc(); }; mapDesc();
     function mapDesc() { const m = UO.MAPS.find((x) => x.id === S.map); $('#mapDesc').textContent = m ? m.desc + ' · ' + m.HW * 2 + '×' + m.HD * 2 + ' m' : 'Mỗi trận chọn ngẫu nhiên một bản đồ'; }
     const seg = (id, key, conv) => { const el = $(id); const sync = () => $$(id + ' button').forEach((b) => b.classList.toggle('on', String(b.dataset.v) === String(S[key]))); sync(); el.onclick = (e) => { const b = e.target.closest('button'); if (!b) return; S[key] = conv ? conv(b.dataset.v) : b.dataset.v; save(); A.ui('click'); sync(); }; };
-    seg('#segRole', 'role'); seg('#segLevel', 'level'); seg('#segQ', 'q', Number);
+    seg('#segRole', 'role'); seg('#segLevel', 'level'); seg('#segQ', 'q', Number); seg('#segFlat', 'flat');
     const tot = $('#total'), sk = $('#seekers');
     const norm = () => {
       S.total = clamp(Math.round(+tot.value) || C.MIN_PLAYERS, C.MIN_PLAYERS, C.MAX_PLAYERS);
@@ -52,7 +52,7 @@
     const others = PP.CHARACTERS.filter((c) => c.id !== mine.id).sort(() => Math.random() - 0.5);
     const players = [{ id: 'me', name: 'Bạn', char: mine.id, isBot: false, base: mine.body }];
     for (let i = 0; i < S.total - 1; i++) { const d = others[i % others.length]; players.push({ id: 'b' + i, name: d.name, char: d.id, isBot: true, level: S.level, base: d.body }); }
-    const sim = new UO.Sim({ mapId, players, seekers: S.seekers, roleMode: S.role, meId: 'me', seed: (Date.now() & 0x7fffffff) || 1 });
+    const sim = new UO.Sim({ mapId, players, seekers: S.seekers, roleMode: S.role, meId: 'me', flat: S.flat, seed: (Date.now() & 0x7fffffff) || 1 });
     new UO.AI(sim);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, [1, 1.5, 2][S.q] || 1.5));
     const world = R.buildWorld(renderer, sim.map, S.q), fx = new R.Fx(world), cam = new R.OrbitCam();
@@ -61,7 +61,7 @@
     cam.yaw = Math.atan2(-me.x, -me.z); cam.pitch = 0.4;
     match = { sim, world, fx, cam, avatars, me, studio: null, studioOpen: false, lowAt: 0, tickAt: -1, hintUntil: 0, spec: null, over: false, pingFlash: 0, resultShown: false };
     resize();
-    document.body.classList.toggle('seeker-role', me.role === 'seeker'); document.body.classList.toggle('hider-role', me.role === 'hider');
+    document.body.classList.toggle('flat-me', !!me.flat); document.body.classList.toggle('seeker-role', me.role === 'seeker'); document.body.classList.toggle('hider-role', me.role === 'hider');
     $('#hud').classList.toggle('hider', me.role === 'hider');
     const rb = $('#roleBadge'); rb.className = 'pill ' + me.role; rb.textContent = me.role === 'seeker' ? '🎯 Người đi tìm' : '🫣 Người đi trốn';
     $('#barALbl').textContent = me.role === 'seeker' ? 'Ná cao su' : 'Chạy nước rút (Shift)';
@@ -154,9 +154,11 @@
     for (let i = 1; i <= n; i++) { const x = last[0] + dx * i / n, y = last[1] + dy * i / n, nd = ndcOf({ clientX: x, clientY: y }); ps.addHit(ps.pick(m.world.camera, nd[0], nd[1])); }
     drawing.last = [e.clientX, e.clientY];
   }
+  const ptrs = new Set();
   function bindStudioPointer() {
     canvas.addEventListener('pointerdown', (e) => {
-      const m = match; if (!m || !m.studioOpen || e.button === 2) return;
+      ptrs.add(e.pointerId); const m = match; if (!m || !m.studioOpen || e.button === 2) return;
+      if (ptrs.size >= 2) { if (drawing && !drawing.rot && m.studio.live) m.studio.cancel(); drawing = null; return; }     // hai ngón = thu phóng, không vẽ
       if (STUDIO_TOOL.tool === 'rotate') { drawing = { rot: true, last: [e.clientX, e.clientY] }; canvas.setPointerCapture(e.pointerId); return; }
       if (!m.studio.begin()) { toast('Đã đạt giới hạn số nét vẽ'); return; }
       drawing = { last: [e.clientX, e.clientY], id: e.pointerId }; canvas.setPointerCapture(e.pointerId);
@@ -164,11 +166,11 @@
     });
     canvas.addEventListener('pointermove', (e) => {
       const m = match; if (!m || !m.studioOpen) return; updateRing(e.clientX, e.clientY);
-      if (!drawing) return;
+      if (!drawing || ptrs.size >= 2) return;
       if (drawing.rot) { m.cam.rotate(e.clientX - drawing.last[0], e.clientY - drawing.last[1], 0.006); drawing.last = [e.clientX, e.clientY]; return; }
       if ((e.buttons & 2) && !(e.buttons & 1)) return; strokeTo(e);
     });
-    const up = () => { const m = match; if (!drawing) return; if (!drawing.rot && m && m.studio) m.studio.end(); drawing = null; };
+    const up = (e) => { ptrs.delete(e.pointerId); const m = match; if (!drawing) return; if (!drawing.rot && m && m.studio) m.studio.end(); drawing = null; };
     canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
     canvas.addEventListener('pointerleave', () => $('#brushRing').classList.remove('on'));
   }
@@ -231,7 +233,7 @@
       closeStudio(); $('#blind').classList.remove('show'); document.body.classList.remove('paint-able');
       A.ui('go'); banner('TRUY TÌM!', 1500);
       if (me.role === 'seeker') { hint('Nghe tiếng kêu: to = gần, nhỏ = xa. Tường làm tiếng nhỏ và đục. Ná bay theo đường cong, hãy ngắm đón đầu!', 10); $('#cross').style.display = 'block'; }
-      else hint('Giữ yên: cúi (C) hoặc nằm sấp (Z) để khó bị thấy · chạy nước rút (Shift) khi bị phát hiện · mỗi 5 giây bạn phát một tiếng kêu!', 10);
+      else hint((me.flat ? '📄 Bạn mỏng như tờ giấy: xoay cạnh mỏng về phía người tìm (' + (In.touch ? 'nút ↺ ↻' : 'phím [ và ]') + ') · ' : '') + 'cúi (C) hoặc nằm sấp (Z) để khó bị thấy · chạy nước rút (Shift) khi bị phát hiện · mỗi 5 giây bạn phát một tiếng kêu!', 11);
     }
   }
   function onOver(r) {
@@ -269,7 +271,7 @@
     const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw), mv = In.move;
     const mx = sy * mv.y - cy * mv.x, mz = cy * mv.y + sy * mv.x;
     const stance = m.studioOpen ? 0 : In.proneOn ? 2 : In.crouch ? 1 : 0;
-    const ctl = m.studioOpen ? { mx: 0, mz: 0, sprint: false, stance: 0, fire: false } : { mx, mz, sprint: In.sprint, stance, fire: me.role === 'seeker' && In.fire && !paused };
+    const ctl = m.studioOpen ? { mx: 0, mz: 0, turn: 0, sprint: false, stance: 0, fire: false } : { mx, mz, turn: In.turn, sprint: In.sprint, stance, fire: me.role === 'seeker' && In.fire && !paused };
     const skip = m.world.cut(me.x, me.y, me.z);                                  // mở mái khi vào nhà
     if (me.role === 'seeker' && sim.phase === 'hunt') {
       const cp = camera.position, f = cam.fwd, d = UO.rayWorld(sim.map, cp.x, cp.y, cp.z, f.x, f.y, f.z, 70, 0.2, skip);
@@ -316,7 +318,7 @@
     else { const v = me.sprinting ? me.sprintLeft / C.HIDER.sprintTime : me.sprintCd > 0 ? 1 - me.sprintCd / C.HIDER.sprintCd : 1; bar.style.width = clamp(v, 0, 1) * 100 + '%'; barA.classList.toggle('cool', !me.sprinting && me.sprintCd > 0);
       if (ph === 'hunt' && !me.caught) { $('#barPFill').style.width = clamp(1 - (me.pingAt - sim.t) / C.PING.every, 0, 1) * 100 + '%'; } else $('#barPFill').style.width = '0%';
       m.pingFlash = Math.max(0, m.pingFlash - dt); $('#barP').classList.toggle('fire', m.pingFlash > 0); }
-    $('#stanceTxt').textContent = me.caught ? '' : (me.stance === 2 ? '🛌 Nằm sấp' : me.stance === 1 ? '🧎 Cúi' : '🧍 Đứng') + (sim.map.levels.length > 1 ? ' · tầng ' + (sim.map.levelOf(me.y) + 1 > 3 ? 'sân thượng' : sim.map.levelOf(me.y) + 1) : '');
+    $('#stanceTxt').textContent = me.caught ? '' : (me.flat ? '📄 ' : '') + (me.stance === 2 ? 'Nằm sấp' : me.stance === 1 ? 'Cúi' : 'Đứng') + (sim.map.levels.length > 1 ? ' · tầng ' + (sim.map.levelOf(me.y) + 1 > 3 ? 'sân thượng' : sim.map.levelOf(me.y) + 1) : '');
   }
 
   function frame(now) {
@@ -334,6 +336,8 @@
     In.init(canvas);
     In.cb.look = (dx, dy) => { if (match && !paused) match.cam.rotate(dx, dy, In.sens * S.sens / 100); };
     In.cb.zoom = (d) => { if (match) match.cam.zoom(d, match.studioOpen); };
+    In.cb.zoomReset = () => { if (match) match.cam.resetZoom(match.studioOpen); };
+    $('#zIn').onclick = () => In.cb.zoom(-1.2); $('#zOut').onclick = () => In.cb.zoom(1.2); $('#zReset').onclick = () => In.cb.zoomReset();
     In.cb.undo = () => { if (match && match.studio) match.studio.undo(); }; In.cb.redo = () => { if (match && match.studio) match.studio.redo(); };
     In.cb.paint = togglePaint;
     In.cb.pause = () => { if (match && !match.over) setPause(!paused); };

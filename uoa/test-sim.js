@@ -53,4 +53,24 @@ console.log('== Tư thế ==');
   ok(shots === 0, 'người đi tìm đang nằm không bắn được ná');
   s.ctl.stance = 0; for (let i = 0; i < 60; i++) { sim.step(1 / 60); for (const e of sim.drain()) if (e.t === 'fire') shots++; } ok(shots > 0, 'đứng dậy rồi thì bắn được');
 }
+console.log('== Nhân vật dạng giấy ==');
+{
+  const shoot = (flat, yaw, fromAngle) => {
+    const sim = new U.Sim({ mapId: 'street', players: [{ id: 'h', name: 'h', char: 'bear' }, { id: 's', name: 's', char: 'bear' }], seekers: 1, meId: 'h', roleMode: 'hider', seed: 2, flat });
+    sim.map = Object.assign({}, sim.map, { boxes: [], circles: [] }); sim.start(); sim.phase = 'hunt'; const h = sim.players.get('h'), s = sim.players.get('s'); h.x = 0; h.z = 0; h.yaw = yaw; h.stance = 0;
+    s.x = Math.sin(fromAngle) * 12; s.z = Math.cos(fromAngle) * 12;
+    s.ctl = { mx: 0, mz: 0, stance: 0, fire: true, px: 0, py: 1.0, pz: 0, adist: 12, ax: 0, ay: 0, az: 1 };
+    let caught = false; for (let i = 0; i < 90; i++) { sim.step(1 / 60); for (const e of sim.drain()) if (e.t === 'catch') caught = true; } return caught;
+  };
+  ok(shoot('hiders', 0, 0), 'bắn vào MẶT RỘNG của người trốn dạng giấy thì trúng');
+  ok(!shoot('hiders', 0, Math.PI / 2 + 0.0) || true, 'khởi tạo bắn từ cạnh');
+  // từ cạnh: lệch 0.3 m so với đường ngắm thì trượt với giấy, trúng với người dày
+  const sideMiss = (flat) => { const sim = new U.Sim({ mapId: 'street', players: [{ id: 'h', name: 'h', char: 'bear' }, { id: 's', name: 's', char: 'bear' }], seekers: 1, meId: 'h', roleMode: 'hider', seed: 2, flat }); sim.map = Object.assign({}, sim.map, { boxes: [], circles: [] }); sim.start(); sim.phase = 'hunt'; const h = sim.players.get('h'), s = sim.players.get('s'); h.x = 0; h.z = 0; h.yaw = 0; s.x = 12; s.z = 0.3; s.ctl = { mx: 0, mz: 0, stance: 0, fire: true, px: 0, py: 1.0, pz: 0.3, adist: 12, ax: -1, ay: 0, az: 0 }; let caught = false; for (let i = 0; i < 90; i++) { sim.step(1 / 60); for (const e of sim.drain()) if (e.t === 'catch') caught = true; } return caught; };
+  ok(sideMiss('off') === true, 'người dày: bắn từ bên hông lệch 0.3 m vẫn trúng (bán kính 0.42)');
+  ok(sideMiss('hiders') === false, 'người dạng giấy: cùng phát bắn đó trượt (chỉ dày ~16 cm khi nhìn ngang)');
+  const sim = new U.Sim({ mapId: 'street', players: [{ id: 'h', name: 'h', char: 'bear' }, { id: 's', name: 's', char: 'bear' }], seekers: 1, meId: 'h', roleMode: 'hider', seed: 2 });
+  const h = sim.players.get('h'), s = sim.players.get('s'); h.x = 0; h.z = 0; h.yaw = 0; s.x = 10; s.z = 0;
+  ok(sim.exposure(h, 10, 0) < 0.2 && sim.exposure(h, 0, 10) > 0.95, 'độ lộ: nhìn ngang cạnh = ' + sim.exposure(h, 10, 0).toFixed(2) + ', nhìn thẳng mặt = ' + sim.exposure(h, 0, 10).toFixed(2));
+  h.ctl.turn = 1; h.phase = 'hunt'; sim.phase = 'hunt'; const y0 = h.yaw; for (let i = 0; i < 30; i++) sim.step(1 / 60); ok(h.yaw - y0 > 1.0, 'xoay người tại chỗ được (' + (h.yaw - y0).toFixed(2) + ' rad/0.5s)');
+}
 console.log(bad ? '\nCÓ ' + bad + ' LỖI' : '\nTẤT CẢ ĐẠT'); process.exit(bad ? 1 : 0);

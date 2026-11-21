@@ -12,7 +12,9 @@
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   const STEP_UP = 0.55, SLAB_T = 0.3;
   const HEIGHT = [C.H_STAND, C.H_CROUCH, C.H_PRONE];           // chiều cao thân theo tư thế (đứng, cúi, nằm)
-  const NEED = [1.9, 1.15, 0.55];                              // độ thoáng đầu tối thiểu để ở tư thế đó
+  const NEED = [1.9, 1.15, 0.55];
+  const heightOf = (p) => (p.flat && p.stance === 2 ? C.FLAT.proneH : HEIGHT[p.stance]);          // dạng giấy nằm sấp chỉ còn dày ~14 cm
+  const needOf = (p, st) => { st = st == null ? p.stance : st; return p.flat && st === 2 ? 0.25 : NEED[st]; };                              // độ thoáng đầu tối thiểu để ở tư thế đó
   const CENTER = [1.0, 0.65, 0.25];                            // độ cao trọng tâm để bot ngắm / kiểm tra tầm nhìn
   const rngOf = (a) => () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 
@@ -273,7 +275,7 @@
       this.events = []; this.acc = 0; this.t = 0; this.phase = 'lobby'; this.phaseT = 0; this.phaseDur = 0;
       this.players = new Map(); this.stones = []; this.stoneId = 1; this.result = null; this.paused = false;
       const n = clamp(opts.players.length, C.MIN_PLAYERS, C.MAX_PLAYERS);
-      this.seekerCount = clamp(opts.seekers | 0, 1, n - 1);
+      this.seekerCount = clamp(opts.seekers | 0, 1, n - 1); this.flatMode = opts.flat || 'hiders';       // 'hiders' | 'all' | 'off'
       const order = opts.players.slice(0, n);
       const meIdx = order.findIndex((p) => p.id === opts.meId), seekIdx = new Set();
       if (opts.roleMode === 'seeker' && meIdx >= 0) seekIdx.add(meIdx);
@@ -286,10 +288,10 @@
         const sp = this.nav.nearestFree(sp0[0], sp0[1], 0), lv = LEVELS[p.level] || LEVELS.normal;
         this.players.set(p.id, {
           id: p.id, name: p.name, char: p.char, isBot: !!p.isBot, level: lv, base: p.base == null ? 0xcccccc : p.base, role,
-          x: sp[0], z: sp[1], y: 0, vy: 0, vx: 0, vz: 0, yaw: role === 'seeker' ? 0 : this.R() * 6.28,
+          flat: this.flatMode === 'all' || (this.flatMode === 'hiders' && role === 'hider'), x: sp[0], z: sp[1], y: 0, vy: 0, vx: 0, vz: 0, yaw: role === 'seeker' ? 0 : this.R() * 6.28,
           stance: 0, crouch: false, prone: false, trans: 0, caught: false, caughtAt: -1, present: true,
           sprintLeft: C.HIDER.sprintTime, sprintCd: 0, sprinting: false, fireCd: 0, pingAt: 1e9, stride: 0, paint: null, art: null,
-          ctl: { mx: 0, mz: 0, sprint: false, stance: 0, fire: false, ax: 0, ay: 0, az: 1, adist: 30 },
+          ctl: { mx: 0, mz: 0, turn: 0, sprint: false, stance: 0, fire: false, ax: 0, ay: 0, az: 1, adist: 30 },
           stat: { catches: 0, caughtT: 0, shots: 0, hits: 0 }, mem: {},
         });
       });
@@ -335,6 +337,11 @@
       return clamp(1 - (1 - clamp(cd / 0.5, 0, 1)) * (0.35 + 0.65 * near), 0.12, 1);
     }
     centerY(p) { return p.y + CENTER[p.stance]; }
+    /** độ lộ của người trốn dạng giấy khi nhìn từ (sx,sz): 1 = nhìn thẳng mặt rộng, ~0.16 = nhìn ngang cạnh mỏng */
+    exposure(h, sx, sz) {
+      if (!h.flat) return 1; const dx = sx - h.x, dz = sz - h.z, d = Math.hypot(dx, dz) || 1, dot = Math.abs((dx * Math.sin(h.yaw) + dz * Math.cos(h.yaw)) / d);
+      return clamp(h.stance === 2 ? 0.35 + dot * 0.2 : dot, C.FLAT.edgeFloor, 1);
+    }
 
     update(dt) {
       if (this.paused || this.phase === 'lobby') return;
@@ -355,7 +362,7 @@
     /** đổi tư thế nếu đủ chỗ (độ thoáng đầu) và không đang chuyển tư thế */
     setStance(p, want) {
       if (want === p.stance || p.trans > 0) return;
-      if (want < p.stance) { const g = groundAt(this.map, p.x, p.z, p.y); if (g.clear < NEED[want]) { p.mem.lowCeil = this.t; return; } }
+      if (want < p.stance) { const g = groundAt(this.map, p.x, p.z, p.y); if (g.clear < needOf(p, want)) { p.mem.lowCeil = this.t; return; } }
       const toFrom = (want === 2 || p.stance === 2);
       p.trans = toFrom ? C.PRONE.transition : 0.15; p.stance = want; p.crouch = want === 1; p.prone = want === 2;
       if (want !== 0) { p.sprinting = false; }
@@ -379,7 +386,8 @@
       if (p.stance === 1) sp *= isH ? C.HIDER.crouch : C.SEEKER.crouch; else if (p.stance === 2) sp *= C.PRONE.speed;
       if (p.trans > 0) sp *= 0.25;
       sp *= (p.isBot ? p.level.speed : 1);
-      const ox = p.x, oz = p.z, ovy = p.y, hgt = HEIGHT[p.stance], need = NEED[p.stance];
+      const ox = p.x, oz = p.z, ovy = p.y, hgt = heightOf(p), need = needOf(p);
+      if (can && c.turn) p.yaw += clamp(c.turn, -1, 1) * C.FLAT.turnRate * dt;                       // xoay người tại chỗ (cạnh mỏng hướng về người tìm)
       // thử đi; nếu đầu chạm trần (gầm cầu thang) thì thử trượt theo từng trục
       const tryMove = (nx, nz) => { const q = { x: nx, z: nz }; resolve(map, q, C.PLAYER_R, p.y, hgt); const g = groundAt(map, q.x, q.z, p.y); if (g.clear < need) return null; return [q.x, q.z, g.h]; };
       const nx = p.x + mx * sp * dt, nz = p.z + mz * sp * dt;
@@ -433,8 +441,16 @@
           if (by <= 0 && by < ay) { const t = ay / (ay - by); if (t < bestT) { bestT = t; kind = 'ground'; } }
           for (const q of this.players.values()) {
             if (q.role !== 'hider' || q.caught || !q.present) continue;
-            const t = segCircle2(ax, az, bx, bz, { x: q.x, z: q.z, r: C.PLAYER_R + S.r }, 0);
-            if (t >= 0 && t < bestT) { const y = ay + (by - ay) * t; if (y >= q.y && y <= q.y + HEIGHT[q.stance]) { bestT = t; kind = 'hider'; who = q; } }
+            if (q.flat) {          // tờ giấy: hộp mỏng quay theo hướng nhân vật (rộng 72 cm, dày ~16 cm; nằm sấp thì dài 1.5 m, dày 14 cm)
+              const sn = Math.sin(q.yaw), cs = Math.cos(q.yaw), F = C.FLAT, prone = q.stance === 2;
+              const lx = (x, z) => (x - q.x) * cs - (z - q.z) * sn, lz = (x, z) => (x - q.x) * sn + (z - q.z) * cs;
+              const box = { x: 0, z: 0, w: 2 * (F.hitHalfW + S.r), d: 2 * ((prone ? F.proneHalfL : F.hitHalfD) + S.r), y: q.y, h: heightOf(q) };
+              const t = segBox3(lx(ax, az), ay, lz(ax, az), lx(bx, bz), by, lz(bx, bz), box, 0);
+              if (t >= 0 && t < bestT) { bestT = t; kind = 'hider'; who = q; }
+            } else {
+              const t = segCircle2(ax, az, bx, bz, { x: q.x, z: q.z, r: C.PLAYER_R + S.r }, 0);
+              if (t >= 0 && t < bestT) { const y = ay + (by - ay) * t; if (y >= q.y && y <= q.y + HEIGHT[q.stance]) { bestT = t; kind = 'hider'; who = q; } }
+            }
           }
           if (kind) {
             s.x = ax + (bx - ax) * bestT; s.y = Math.max(0, ay + (by - ay) * bestT); s.z = az + (bz - az) * bestT; dead = true;
@@ -479,5 +495,5 @@
       this.result = res; this.phase = 'over'; this.phaseT = 0; this.emit({ t: 'over', result: res });
     }
   }
-  return { Sim, Nav, navOf, prepMap, groundAt, heightAt, covers, hearGain, blockers3, blockersBetween, rayWorld, resolve, cdist, mixHex, hexNum, HEIGHT, NEED, CENTER, STEP_UP, SLAB_T };
+  return { Sim, heightOf, Nav, navOf, prepMap, groundAt, heightAt, covers, hearGain, blockers3, blockersBetween, rayWorld, resolve, cdist, mixHex, hexNum, HEIGHT, NEED, CENTER, STEP_UP, SLAB_T };
 });

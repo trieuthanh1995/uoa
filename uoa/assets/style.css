@@ -130,7 +130,8 @@ body:not(.touch).seeker-role:not(.locked) #lockHint{display:block}
 body.studio #brushRing.on{display:block}
 body.studio #joy,body.studio #tbtns,body.studio #bars,body.studio #cross,body.studio #hint,body.studio #stanceTxt{display:none!important}
 #stanceTxt{position:absolute;left:12px;bottom:calc(18px + env(safe-area-inset-bottom));color:#fff;font-weight:800;font-size:13px;text-shadow:0 1px 5px #000;background:rgba(20,26,48,.5);padding:4px 10px;border-radius:999px}
-body.touch #stanceTxt{bottom:calc(168px + env(safe-area-inset-bottom));left:auto;right:12px}
+body.touch #stanceTxt{bottom:calc(168px + env(safe-area-inset-bottom));left:12px;right:auto}
+body.touch #zoomCtl{top:44%}
 body.touch.seeker-role #bSprint{display:none}
 body.touch.seeker-role #bCrouch{display:block}
 @media (max-height:460px){
@@ -138,3 +139,13 @@ body.touch.seeker-role #bCrouch{display:block}
   .sw{grid-template-columns:repeat(9,1fr);gap:4px;margin:6px 0}.zones button{font-size:10px;padding:3px 0}
   #paintNote,.lbl small{display:none}.actrow button{height:28px;font-size:11px}.sl{margin:3px 0}
 }
+
+/* thu phóng: nút cố định trên màn hình, không bị camera/bảng màu ảnh hưởng */
+#zoomCtl{position:absolute;right:max(12px,env(safe-area-inset-right));top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:8px;z-index:6}
+#zoomCtl button{width:42px;height:42px;border-radius:12px;border:2px solid rgba(255,255,255,.55);background:rgba(20,26,48,.6);color:#fff;font-size:22px;font-weight:800;cursor:pointer;line-height:1;touch-action:manipulation}
+#zoomCtl button:active{background:rgba(255,255,255,.55);color:#14203a}
+#paint{touch-action:pan-y}
+.tbtn.turn{display:none;width:52px;height:52px;font-size:24px}
+body.touch.flat-me .tbtn.turn{display:block}
+#stanceTxt small{opacity:.8;font-weight:600}
+@media (max-height:460px){#zoomCtl button{width:36px;height:36px;font-size:19px}}

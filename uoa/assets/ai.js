@@ -24,7 +24,8 @@
         const y = nav.hgt[id]; let blocked = 0; const N = 16;
         for (let i = 0; i < N; i++) { const a = i / N * Math.PI * 2; if (blockers3(map, x, y + 1.0, z, x + Math.sin(a) * 7, y + 1.0, z + Math.cos(a) * 7) > 0) blocked++; }
         const bd = sim.backdrop(x, z, y), near = bd.dist < 1.4 ? 0.3 : 0;
-        out.push({ x, z, y, k, e, score: blocked / N + near });
+        let wallA = null, bestD = 1e9; for (const L of [0.9, 1.6, 2.6]) { for (let i = 0; i < N; i++) { const a = i / N * Math.PI * 2; if (blockers3(map, x, y + 1.0, z, x + Math.sin(a) * L, y + 1.0, z + Math.cos(a) * L) > 0 && L < bestD) { bestD = L; wallA = a; } } if (wallA != null) break; }
+        out.push({ x, z, y, k, e, score: blocked / N + near, wallA });
       }
     }
     out.sort((a, b) => b.score - a.score); nav._spots = out; return out;
@@ -87,6 +88,7 @@
         m.spot = this.chooseSpot(sim, p); m.paintAt = sim.t + 2 + this.rnd() * 14; m.state = 'goto';
         this.goTo(sim, p, m.spot.x, m.spot.z, m.spot.y);
       }
+      if (m.state === 'goto' || m.state === 'flee') m.faced = false;
       if (m.paintAt != null && sim.t >= m.paintAt && sim.canPaint()) { sim.setPaint(p.id, this.paintFor(sim, p, m.spot)); m.paintAt = null; }
       if (ph !== 'hunt') { p.ctl.stance = (!m.path && m.spot) ? (m.hs == null ? (m.hs = this.holdStance(p)) : m.hs) : 0; p.ctl.sprint = false; return; }
       if (m.paintAt != null && sim.canPaint()) m.paintAt = null;
@@ -112,6 +114,7 @@
         m.holdT = (m.holdT || 0) + dt; p.ctl.sprint = false;
         if (m.hs == null) m.hs = this.holdStance(p);
         p.ctl.stance = !m.path ? m.hs : 0;
+        if (p.flat && !m.path && m.spot && m.spot.wallA != null && p.stance === m.hs && !m.faced) { p.yaw = m.spot.wallA + Math.PI / 2; m.faced = true; }
         if (!m.path && !m.dodge && m.holdT > (m.nextMove || 30) && !threat && p.level.plan > 0.3) {
           m.spot = this.chooseSpot(sim, p); m.state = 'goto'; m.hs = null; this.goTo(sim, p, m.spot.x, m.spot.z, m.spot.y);
         }
@@ -123,7 +126,7 @@
       const dh = Math.hypot(h.x - s.x, h.z - s.z), dy = h.y - s.y, d = Math.hypot(dh, dy); if (d > 40) return 0;
       if (blockers3(sim.map, s.x, s.y + 1.6, s.z, h.x, sim.centerY(h), h.z) > 0) return 0;
       const a = Math.atan2(h.x - s.x, h.z - s.z); if (dh > 4 && Math.abs(angDiff(a, s.yaw)) > 1.25) return 0;
-      const stanceK = h.stance === 2 ? 0.42 : h.stance === 1 ? 0.6 : 1;
+      const stanceK = (h.stance === 2 ? 0.42 : h.stance === 1 ? 0.6 : 1) * (h.flat ? 0.2 + 0.8 * sim.exposure(h, s.x, s.z) : 1);
       const range = 15 * (0.25 + 0.75 * sim.conspicuity(h)) * s.level.eye * (h.sprinting ? 1.3 : Math.hypot(h.vx, h.vz) > 0.3 ? 1.15 : 0.85) * stanceK;
       return d < range ? 1 - d / range * 0.5 : 0;
     }

@@ -122,11 +122,11 @@
     constructor(world, p, isMe) {
       this.p = p; this.isMe = isMe; const def = CHAR(p.char);
       this.ch = PP.Character.build(def, { team: 'B', look: null });
-      this.holder = new T.Group(); this.pitch = new T.Group(); this.pitch.add(this.ch.root); this.holder.add(this.pitch); world.scene.add(this.holder);
+      this.holder = new T.Group(); this.pitch = new T.Group(); this.flatG = new T.Group(); this.flatG.add(this.ch.root); this.pitch.add(this.flatG); this.holder.add(this.pitch); world.scene.add(this.holder);
       this.ch.root.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
       if (p.role === 'seeker' && PP.Guns) { this.gun = PP.Guns.attach(this.ch, 'sniper', 0x8a5a33); } else this.ch.root.traverse((o) => { if (o.userData && o.userData.paddle) o.visible = false; });
       if (isMe) this.ch.setHighlight(p.role === 'seeker' ? 0xff9f1c : 0x5ad1ff);
-      this.scaleY = 1; this.paintKey = ''; this.proneT = 0; this.catchT = -1; this.useStudio = false; this.fy = 0;
+      this.scaleY = 1; this.paintKey = ''; this.proneT = 0; this.flatT = 0; this.catchT = -1; this.useStudio = false; this.fy = 0;
       this.holder.scale.setScalar(C.CHAR_SCALE);
     }
     sync(dt, sim, hideSelf) {
@@ -138,7 +138,10 @@
       let mode = 'ready'; if (p.caught) mode = 'sad'; else if (sim.phase === 'over') mode = (sim.result && ((sim.result.winner === 'seekers') === (p.role === 'seeker'))) ? 'celebrate' : 'sad';
       else if (spd < 0.2) mode = 'idle';
       // nằm sấp thật: xoay cả thân 90° về phía trước, úp mặt xuống, ngẩng đầu; bò thì dùng chu kỳ tay-chân
-      this.pitch.rotation.x = e * Math.PI / 2; this.pitch.position.set(0, e * 0.21, -e * 0.62);
+      // dạng giấy bẹt: ép mỏng theo chiều trước-sau (nhìn ngang chỉ còn một đường mỏng)
+      this.flatT = clamp(this.flatT + (p.flat ? 1 : -1) * dt / 0.45, 0, 1); const fl = smooth(this.flatT);
+      this.flatG.scale.set(1, 1, 1 + (C.FLAT.thick - 1) * fl);
+      this.pitch.rotation.x = e * Math.PI / 2; this.pitch.position.set(0, e * (0.21 + (0.05 - 0.21) * fl), -e * 0.62);
       const upd = { x: 0, z: 0, vx: lvx, vz: lvz, mode };
       if (e > 0.02 && !p.caught) { upd.mode = spd > 0.2 ? 'ready' : 'idle'; upd.headP = -1.15 * e; }
       this.ch.update(dt, upd);
@@ -187,9 +190,11 @@
 
   /* ---------- camera quanh nhân vật ---------- */
   class OrbitCam {
-    constructor() { this.yaw = 0; this.pitch = 0.42; this.want = 5.8; this.cur = 5.8; this.pos = new T.Vector3(); this.look = new T.Vector3(); this.fwd = new T.Vector3(); this.shake = 0; this.ty = 1.6; this.sdist = 2.7; }
+    constructor() { this.yaw = 0; this.pitch = 0.42; this.want = 5.8; this.cur = 5.8; this.pos = new T.Vector3(); this.look = new T.Vector3(); this.fwd = new T.Vector3(); this.shake = 0; this.ty = 1.6; this.sdist = 2.7; this.sdistT = 2.7; }
     rotate(dx, dy, sens) { this.yaw -= dx * sens; this.pitch = clamp(this.pitch + dy * sens, -0.35, 1.25); }
-    zoom(d, studio) { if (studio) this.sdist = clamp(this.sdist + d * 0.4, 1.3, 5); else this.want = clamp(this.want + d, 2.6, 10); }
+    /** thu phóng: d > 0 là zoom ra, d < 0 là zoom vào (xưởng tô màu và khi chơi có khoảng cách riêng) */
+    zoom(d, studio) { if (studio) this.sdistT = clamp(this.sdistT + d * 0.4, 0.9, 5); else this.want = clamp(this.want + d, 1.8, 14); }
+    resetZoom(studio) { if (studio) this.sdistT = 2.7; else this.want = 5.8; }
     /** tx,ty,tz: điểm nhìn; fy: độ cao sàn dưới chân; skip: { above, rect } để bỏ qua mái khi vào nhà */
     update(dt, camera, map, tx, ty, tz, aiming, fy, skip) {
       this.ty += (ty - this.ty) * Math.min(1, dt * 8); ty = this.ty;                         // đổi tư thế: độ cao camera đổi từ từ, không giật
@@ -204,7 +209,7 @@
     }
     /** xưởng tô màu: quay quanh nhân vật ở cự ly gần, không xét va chạm */
     studioUpdate(dt, camera, tx, ty, tz) {
-      this.ty += (ty - this.ty) * Math.min(1, dt * 8);
+      this.ty += (ty - this.ty) * Math.min(1, dt * 8); this.sdist += (this.sdistT - this.sdist) * Math.min(1, dt * 10);
       const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch), sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
       this.pos.set(tx - sy * cp * this.sdist, Math.max(0.2, this.ty + sp * this.sdist), tz - cy * cp * this.sdist);
       this._finish(camera, cp, sp, sy, cy);

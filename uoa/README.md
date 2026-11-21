@@ -1,6 +1,11 @@
-# Ú òa – Trốn tìm 3D (v0.2)
+# Ú òa – Trốn tìm 3D (v0.3)
 
 Game riêng, tách khỏi game súng nước. Dùng lại 100% nhân vật gốc (18 nhân vật, `character.js` chỉ thêm hàm tô màu `setPaint`, không đổi hình dáng).
+
+## Có gì mới ở v0.3
+1. **Thu phóng (zoom):** nút ＋ − ⟲ cố định bên phải màn hình, lăn chuột, phím + / − / 0 (đặt lại), Ctrl+cuộn, và hai ngón chụm/giãn trên điện thoại. Có cả khi chơi (1.8–14 m) lẫn trong xưởng tô màu (0.9–5 m), zoom mượt.
+2. **Bảng màu đứng yên khi thu phóng:** zoom chỉ đổi camera 3D; bảng màu là lớp giao diện riêng nên kích thước/vị trí không đổi. Ctrl+cuộn, Ctrl +/−, cử chỉ chụm 2 ngón đều bị chặn zoom cả trang mà chuyển thành zoom cảnh. Hai ngón chạm vào nhân vật trong xưởng sẽ hủy nét đang vẽ chứ không vẽ nhầm.
+3. **Nhân vật dạng giấy bẹt:** nhân vật bị ép mỏng như tờ giấy cán mỏng (còn ~10% độ dày), có hiệu ứng “ép bẹt” lúc vào trận. Mặc định áp dụng cho **người trốn** (đổi trong thiết lập: Người trốn / Tất cả / Tắt). Ảnh hưởng thật tới luật chơi: hộp trúng đạn mỏng (rộng 72 cm, dày ~16 cm; nằm sấp chỉ dày 14 cm nên chui được dưới khe thấp hơn), tầm nhìn của bot giảm mạnh khi nhìn ngang cạnh mỏng, bot trốn tự quay cạnh mỏng ra phía khoảng trống. Người chơi xoay người tại chỗ bằng phím [ và ] (nút ↺ ↻ trên điện thoại). Khi người đi trốn thắng thế quá, chỉnh `C.FLAT` trong `config.js`.
 
 ## Có gì mới ở v0.2
 1. **Cọ vẽ tự do (Xưởng tô màu):** vẽ trực tiếp lên mô hình 3D nhân vật. Chọn vùng (đầu, thân trước, thân sau, tay trái/phải, chân trái/phải); cọ cứng / mềm / chấm / tẩy; cỡ cọ, độ mờ, màu tùy chỉnh (hex); hoàn tác – làm lại (Ctrl+Z / Ctrl+Y), xóa nét vùng, về màu gốc, đổ màu vùng / cả người. Nét vẽ bám đúng bề mặt (tính UV + tỉ lệ bề mặt tại điểm chạm), có viền sáng báo vùng đang chỉnh, chỉ tạo texture cho mesh bị đụng tới. Màu trung bình các vùng được tính lại để bot đánh giá độ ngụy trang. Lịch sử nét vẽ lưu dạng dữ liệu gọn (`exportArt`) – sẵn để đồng bộ mạng.

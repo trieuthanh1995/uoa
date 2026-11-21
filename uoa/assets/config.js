@@ -30,6 +30,8 @@
     // --- âm thanh định vị
     PING: { every: 5, stagger: true, crouchGain: 0.6, proneGain: 0.5, range: 45, wallLoss: 0.45, wallLP: 900 },
     FOOT: { walkRange: 7, sprintRange: 18 },   // tiếng bước chân nghe được trong bán kính (m); cúi = im lặng
+    // --- nhân vật dạng giấy bẹt: mỏng theo chiều trước-sau, nhìn ngang gần như chỉ còn một đường
+    FLAT: { thick: 0.1, hitHalfW: 0.36, hitHalfD: 0.08, proneH: 0.14, proneHalfL: 0.75, turnRate: 2.6, edgeFloor: 0.16 },
     // --- điểm thưởng
     POINTS: { seekCatch: 10, seekWin: 20, seekPlay: 5, hideSurvive: 15, hideWin: 20, hidePlay: 5 },
   };
